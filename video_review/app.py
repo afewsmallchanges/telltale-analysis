@@ -68,11 +68,11 @@ class MainWindow(QMainWindow):
         quit_act.triggered.connect(self.close)
         file_menu.addAction(quit_act)
 
-        view_menu = self.menuBar().addMenu("&View")
-        fs_act = QAction("&Full screen", self, shortcut=QKeySequence("F11"))
-        fs_act.triggered.connect(self.toggle_fullscreen)
-        view_menu.addAction(fs_act)
-
+        settings_menu = self.menuBar().addMenu("&Settings")
+        scroll_act = QAction("&Scroll && touchpad…", self, shortcut=QKeySequence("Ctrl+,"))
+        scroll_act.triggered.connect(self.open_scroll_settings)
+        settings_menu.addAction(scroll_act)
+        
         p = self.player
         keys = {
             "Space": p.toggle_play,
@@ -140,6 +140,12 @@ class MainWindow(QMainWindow):
         if self._worker:
             self._worker.deleteLater()
             self._worker = None
+
+    # added with addition of settings menu
+    def open_scroll_settings(self):
+        from .settings_dialog import ScrollSettingsDialog
+        self.player.pause()
+        ScrollSettingsDialog(self).exec()
 
     # --- drag and drop -----------------------------------------------------
     def dragEnterEvent(self, event):

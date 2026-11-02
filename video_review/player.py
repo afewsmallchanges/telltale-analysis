@@ -37,10 +37,8 @@ from PySide6.QtWidgets import (
 from .frames import FrameSource
 
 # --- Scroll wheel settings ---------------------------------------------------
-WHEEL_UP_IS_FORWARD = True   # flip if you prefer scroll-down = forward
+from . import settings
 NOTCH = 120                  # Qt units per mouse-wheel click
-TOUCHPAD_PX_PER_FRAME = 12   # touchpad pixels per frame step
-SHIFT_MULTIPLIER = 10        # Shift + scroll moves this many frames per step
 
 
 ICON_DIR = Path(__file__).parent / "icons"
@@ -55,29 +53,23 @@ class WheelStepper:
         self._acc = 0.0
 
     def steps(self, event: QWheelEvent) -> int:
-
+        s = settings.wheel  # read every time, so changes apply immediately
         pixel = event.pixelDelta()
         angle = event.angleDelta()
-
         if not pixel.isNull():
-            delta = (pixel.y() or pixel.x()) / TOUCHPAD_PX_PER_FRAME
+            delta = (pixel.y() or pixel.x()) / s.touchpad_px_per_frame
         else:
             # Some systems turn Shift+wheel into horizontal scrolling.
-            delta = (angle.y() or angle.x()) / NOTCH
-
-        if not WHEEL_UP_IS_FORWARD:
+            delta = (angle.y() or angle.x()) / NOTCH * s.frames_per_click
+        if not s.up_is_forward:
             delta = -delta
-
         if self._acc and (delta > 0) != (self._acc > 0):
             self._acc = 0.0  # direction changed: drop the leftover
-
         self._acc += delta
         whole = int(self._acc)
         self._acc -= whole
-
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            whole *= SHIFT_MULTIPLIER
-
+            whole *= s.shift_multiplier
         return whole
 
 
