@@ -7,6 +7,24 @@ This project is to create a video playback / analysis application with the follo
 3. Side-by-side playback
 
 
-## Things you'll need
+
+## Dependencies
 ### Ubuntu
 - `sudo install python3-venv libxcd-cursor0`
+### Fedora
+
+## How to use
+
+
+## How to use (if you aren't a software person)
+
+
+## Notes during development
+
+### FFMpeg
+The environment prefers the copy bundled with the `imageio-ffmpeg` pip package, so the app behaves the same on every distro. 
+Set IMAGEIO_FFMPEG_EXE to force a specific binary.
+
+
+## Attribution
+Significant Portions of the early part of this project was developed with assistance from Claude Opus 5.5 (High)
