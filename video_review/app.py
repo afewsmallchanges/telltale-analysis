@@ -50,7 +50,7 @@ class ImportWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Replay Desk")
+        self.setWindowTitle("Video Review")
         self.resize(1280, 800)
         self.setAcceptDrops(True)
 
@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
     def _import_done(self, info: ingest.ClipInfo):
         self.player.load(FrameSource(info))
         name = Path(info.source).name
-        self.setWindowTitle(f"{name} — Replay Desk")
+        self.setWindowTitle(f"{name} — Video Review")
         self.statusBar().showMessage(
             f"{name}   {info.width}×{info.height}   {info.fps:g} fps   "
             f"{info.frame_count} frames"
