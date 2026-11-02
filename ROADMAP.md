@@ -15,7 +15,7 @@
 5. Available as app package
 6. Windows / Mac compatability
 
-## Moonshot goals
+## Moonshot goals (one day)
 1. object / edge detection for point tracking
 2. Intelligent object crop - zoom onto target moving in frame, keep target in centre of crop.
 3. iOS / Android Support
