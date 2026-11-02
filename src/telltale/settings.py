@@ -1,6 +1,6 @@
 """User settings, saved between sessions.
 
-Stored in ~/.config/replaydesk/replaydesk.conf (a plain text INI file).
+Stored in ~/.config/telltale/telltale.conf (a plain text INI file).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from PySide6.QtCore import QSettings
 
 
 def _store() -> QSettings:
-    return QSettings("video_review", "video_review")
+    return QSettings("telltale", "telltale")
 
 
 @dataclass

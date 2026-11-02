@@ -1,45 +1,49 @@
-# app.py
+# main_window.py
+# The main window: opening/importing clips, menus and keyboard shortcuts.
 
 from __future__ import annotations
 
-import sys
 import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence, QPalette, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
 )
 
-from . import ingest
-from .frames import FrameSource
+from ..core import timebase
+from ..core.clip import ClipInfo
+from ..core.frames import FrameSource
+from ..core.library import ImportCancelled, Library
 from .player import PlayerWidget
+
+APP_TITLE = "Telltale Analysis"
 
 VIDEO_FILTER = "Video files (*.mp4 *.mov *.mkv *.avi *.mts *.m2ts *.ts *.webm *.mxf);;All files (*)"
 
 
 class ImportWorker(QThread):
-    """Runs ingest.import_clip off the UI thread."""
+    # Runs Library.import_clip off the UI thread.
 
     progress = Signal(float)
     finished_ok = Signal(object)  # ClipInfo
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, path: Path, parent=None):
+    def __init__(self, library: Library, path: Path, parent=None):
         super().__init__(parent)
+        self.library = library
         self.path = path
         self.cancel_event = threading.Event()
 
     def run(self):
         try:
-            info = ingest.import_clip(self.path, self.progress.emit, self.cancel_event)
-        except ingest.ImportCancelled:
+            info = self.library.import_clip(self.path, self.progress.emit, self.cancel_event)
+        except ImportCancelled:
             self.cancelled.emit()
         except Exception as e:  # report anything to the user rather than crash
             self.failed.emit(str(e))
@@ -50,10 +54,11 @@ class ImportWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Review")
+        self.setWindowTitle(APP_TITLE)
         self.resize(1280, 800)
         self.setAcceptDrops(True)
 
+        self.library = Library()
         self.player = PlayerWidget()
         self.setCentralWidget(self.player)
         self._worker: ImportWorker | None = None
@@ -68,11 +73,15 @@ class MainWindow(QMainWindow):
         quit_act.triggered.connect(self.close)
         file_menu.addAction(quit_act)
 
+        #edit_menu = self.menuBar().addMenu("&Edit")
+
+        #view_menu = self.menuBar().addMenu("&View")
+
         settings_menu = self.menuBar().addMenu("&Settings")
         scroll_act = QAction("&Scroll && touchpad…", self, shortcut=QKeySequence("Ctrl+,"))
         scroll_act.triggered.connect(self.open_scroll_settings)
         settings_menu.addAction(scroll_act)
-        
+
         p = self.player
         keys = {
             "Space": p.toggle_play,
@@ -110,7 +119,7 @@ class MainWindow(QMainWindow):
         self._progress.setMinimumDuration(400)  # instant for already-imported clips
         self._progress.setValue(0)
 
-        worker = ImportWorker(path, self)
+        worker = ImportWorker(self.library, path, self)
         worker.progress.connect(lambda f: self._progress and self._progress.setValue(int(f * 1000)))
         worker.finished_ok.connect(self._import_done)
         worker.failed.connect(self._import_failed)
@@ -120,13 +129,13 @@ class MainWindow(QMainWindow):
         self._worker = worker
         worker.start()
 
-    def _import_done(self, info: ingest.ClipInfo):
+    def _import_done(self, info: ClipInfo):
         self.player.load(FrameSource(info))
-        name = Path(info.source).name
-        self.setWindowTitle(f"{name} — Video Review")
+        self.setWindowTitle(f"{info.name} — {APP_TITLE}")
+        sound = "" if info.has_audio else "   no audio"
         self.statusBar().showMessage(
-            f"{name}   {info.width}×{info.height}   {info.fps:g} fps   "
-            f"{info.frame_count} frames"
+            f"{info.name}   {info.width}×{info.height}   "
+            f"{timebase.format_rate(info.rate)} fps   {info.frame_count} frames{sound}"
         )
 
     def _import_failed(self, message: str):
@@ -177,35 +186,3 @@ class MainWindow(QMainWindow):
             self._worker.cancel_event.set()
             self._worker.wait(5000)
         super().closeEvent(event)
-
-
-def apply_dark_theme(app: QApplication):
-    app.setStyle("Fusion")
-    pal = QPalette()
-    base, panel, text, accent = QColor(18, 18, 20), QColor(32, 32, 36), QColor(225, 225, 230), QColor(225, 40, 60)
-    pal.setColor(QPalette.ColorRole.Window, panel)
-    pal.setColor(QPalette.ColorRole.WindowText, text)
-    pal.setColor(QPalette.ColorRole.Base, base)
-    pal.setColor(QPalette.ColorRole.AlternateBase, panel)
-    pal.setColor(QPalette.ColorRole.Text, text)
-    pal.setColor(QPalette.ColorRole.Button, panel)
-    pal.setColor(QPalette.ColorRole.ButtonText, text)
-    pal.setColor(QPalette.ColorRole.ToolTipBase, panel)
-    pal.setColor(QPalette.ColorRole.ToolTipText, text)
-    pal.setColor(QPalette.ColorRole.Highlight, accent)
-    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText, QPalette.ColorRole.WindowText):
-        pal.setColor(QPalette.ColorGroup.Disabled, role, QColor(110, 110, 115))
-    app.setPalette(pal)
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv if argv is None else argv
-    app = QApplication(argv)
-    app.setApplicationName("Video-Review")
-    apply_dark_theme(app)
-    win = MainWindow()
-    win.show()
-    if len(argv) > 1:
-        win.open_path(Path(argv[1]))
-    return app.exec()

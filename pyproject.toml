@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telltale-analysis"
+version = "0.1.0"
+description = "Frame-by-frame video review and analysis for sailing footage"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.5",
+    # Must be the *headless* OpenCV: the normal opencv-python wheel bundles its
+    # own Qt, which clashes with PySide6 ("could not load the Qt platform plugin").
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+    # Ships its own FFmpeg binary, so imports work the same on every distro.
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+telltale = "telltale.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+telltale = ["ui/icons/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import settings
+from .. import settings
 from .player import WheelStepper
 
 

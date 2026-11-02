@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from pathlib  import Path
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import (
@@ -34,10 +34,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .frames import FrameSource
+from ..core.frames import FrameSource
 
 # --- Scroll wheel settings ---------------------------------------------------
-from . import settings
+from .. import settings
 NOTCH = 120                  # Qt units per mouse-wheel click
 
 
@@ -196,11 +196,7 @@ class PlayerWidget(QWidget):
         self.btn_play = button(self.icon_play, "Play / pause (Space)", self.toggle_play)
         self.btn_fwd = button(icon("step_fwd"), "Forward one frame (→, scroll)", lambda: self.step(1))
         self.btn_end = button(icon("last"), "Last frame (End)", lambda: self.seek(10**9))
-        
-        for b in (self.btn_start, self.btn_back, self.btn_play, self.btn_fwd, self.btn_end):
-            f = b.font()
-            f.setPointSize(f.pointSize() + 3)
-            b.setFont(f)
+
 
         self.speed_box = QComboBox()
         self.speed_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)

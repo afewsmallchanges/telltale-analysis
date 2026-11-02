@@ -7,7 +7,8 @@ from collections import OrderedDict
 import cv2
 import numpy as np
 
-from .ingest import ClipInfo
+from . import timebase
+from .clip import ClipInfo
 
 
 class FrameSource:
@@ -38,7 +39,7 @@ class FrameSource:
         buf = np.fromfile(self.info.frame_path(n), dtype=np.uint8)
         bgr = cv2.imdecode(buf, cv2.IMREAD_COLOR)
         if bgr is None:
-            raise IOError(f"Could not decode frame {n} of {self.info.source}")
+            raise IOError(f"Could not decode frame {n} of {self.info.name}")
         img = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
         if self._cache_frames:
@@ -52,11 +53,8 @@ class FrameSource:
 
     def timestamp(self, n: int) -> float:
         """Seconds from the start of the clip to frame ``n``."""
-        return n / self.fps
+        return timebase.frame_to_seconds(n, self.info.rate)
 
     def timecode(self, n: int) -> str:
         """mm:ss.ff label, where ff is the frame number within the second."""
-        fps_int = max(1, round(self.fps))
-        total_s, ff = divmod(n, fps_int)
-        m, s = divmod(total_s, 60)
-        return f"{m:02d}:{s:02d}.{ff:02d}"
+        return timebase.timecode(n, self.info.rate)
