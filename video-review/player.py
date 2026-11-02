@@ -5,9 +5,24 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from pathlib  import Path
+
 import numpy as np
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QWheelEvent
+from PySide6.QtCore import (
+    QRectF, 
+    Qt, 
+    QTimer, 
+    QSize,  
+    Signal
+) 
+from PySide6.QtGui import (
+    QColor, 
+    QFont, 
+    QImage, 
+    QPainter, 
+    QWheelEvent, 
+    QIcon
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -28,38 +43,46 @@ TOUCHPAD_PX_PER_FRAME = 12   # touchpad pixels per frame step
 SHIFT_MULTIPLIER = 10        # Shift + scroll moves this many frames per step
 
 
-class WheelStepper:
-    """Turns wheel events into whole frame steps.
+ICON_DIR = Path(__file__).parent / "icons"
+ICON_PX = 24
 
-    Mouse wheels send 120 units per click; touchpads send many small pixel
-    deltas. Leftovers are accumulated so slow touchpad swipes still step.
-    """
+def icon(name: str) -> QIcon:
+    return QIcon(str(ICON_DIR / f"{name}.svg"))
+
+class WheelStepper:
 
     def __init__(self):
         self._acc = 0.0
 
     def steps(self, event: QWheelEvent) -> int:
+
         pixel = event.pixelDelta()
         angle = event.angleDelta()
+
         if not pixel.isNull():
             delta = (pixel.y() or pixel.x()) / TOUCHPAD_PX_PER_FRAME
         else:
             # Some systems turn Shift+wheel into horizontal scrolling.
             delta = (angle.y() or angle.x()) / NOTCH
+
         if not WHEEL_UP_IS_FORWARD:
             delta = -delta
+
         if self._acc and (delta > 0) != (self._acc > 0):
             self._acc = 0.0  # direction changed: drop the leftover
+
         self._acc += delta
         whole = int(self._acc)
         self._acc -= whole
+
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             whole *= SHIFT_MULTIPLIER
+
         return whole
 
 
 class VideoView(QWidget):
-    """Draws the current frame, letterboxed, and turns scrolling into steps."""
+    # Draws the current frame letterboxed, and turns scrolling into steps
 
     stepRequested = Signal(int)
 
@@ -83,8 +106,9 @@ class VideoView(QWidget):
             self._image = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
         self.update()
 
+    # Where the picture sits inside the widget (used later for drawing)
     def image_rect(self) -> QRectF:
-        """Where the picture sits inside the widget (used later for drawing)."""
+        
         if self._image is None:
             return QRectF(self.rect())
         iw, ih = self._image.width(), self._image.height()
@@ -113,7 +137,7 @@ class VideoView(QWidget):
 
 
 class TimelineSlider(QSlider):
-    """Horizontal scrubber. Its scroll wheel steps frames like the picture."""
+    # Horizontal scrubber. Its scroll wheel steps frames like the picture.
 
     def __init__(self, on_steps: Callable[[int], None], parent=None):
         super().__init__(Qt.Orientation.Horizontal, parent)
@@ -141,7 +165,7 @@ SPEEDS = [("1×", 1.0), ("½×", 0.5), ("¼×", 0.25), ("⅒×", 0.1)]
 
 
 class PlayerWidget(QWidget):
-    """One clip: picture, timeline, transport buttons and frame readout."""
+    # One clip: picture, timeline, transport buttons and frame readout.
 
     frameChanged = Signal(int)
 
@@ -161,20 +185,26 @@ class PlayerWidget(QWidget):
         self.slider = TimelineSlider(self.step)
         self.slider.valueChanged.connect(self._slider_moved)
 
-        def button(text, tip, slot):
+        self.icon_play = icon("play")
+        self.icon_pause = icon("pause")
+
+        def button(ico, tip, slot):
             b = QToolButton()
-            b.setText(text)
+            b.setIcon(ico)
             b.setToolTip(tip)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setAutoRaise(True)
             b.clicked.connect(slot)
+            b.setIconSize(QSize(ICON_PX, ICON_PX))
+            b.setFixedSize(ICON_PX + 12, ICON_PX + 12)
             return b
 
-        self.btn_start = button("⏮", "First frame (Home)", lambda: self.seek(0))
-        self.btn_back = button("◀|", "Back one frame (←, scroll)", lambda: self.step(-1))
-        self.btn_play = button("▶", "Play / pause (Space)", self.toggle_play)
-        self.btn_fwd = button("|▶", "Forward one frame (→, scroll)", lambda: self.step(1))
-        self.btn_end = button("⏭", "Last frame (End)", lambda: self.seek(10**9))
+        self.btn_start = button(icon("first"), "First frame (Home)", lambda: self.seek(0))
+        self.btn_back = button(icon("step_back"), "Back one frame (←, scroll)", lambda: self.step(-1))
+        self.btn_play = button(self.icon_play, "Play / pause (Space)", self.toggle_play)
+        self.btn_fwd = button(icon("step_fwd"), "Forward one frame (→, scroll)", lambda: self.step(1))
+        self.btn_end = button(icon("last"), "Last frame (End)", lambda: self.seek(10**9))
+        
         for b in (self.btn_start, self.btn_back, self.btn_play, self.btn_fwd, self.btn_end):
             f = b.font()
             f.setPointSize(f.pointSize() + 3)
@@ -183,8 +213,8 @@ class PlayerWidget(QWidget):
         self.speed_box = QComboBox()
         self.speed_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.speed_box.setToolTip("Playback speed")
-        for label, value in SPEEDS:
-            self.speed_box.addItem(label, value)
+        # for label, value in SPEEDS:
+        #     self.speed_box.addItem(label, value)
         self.speed_box.currentIndexChanged.connect(self._speed_changed)
 
         self.readout = QLabel("—")
@@ -236,7 +266,7 @@ class PlayerWidget(QWidget):
         self.frameChanged.emit(n)
 
     def step(self, delta: int):
-        """Manual stepping always pauses playback first."""
+        # Manual stepping always pauses playback first.
         self.pause()
         self.seek(self.current + delta)
 
@@ -253,11 +283,13 @@ class PlayerWidget(QWidget):
         if self.current >= self.source.frame_count - 1:
             self.seek(0)
         self.timer.start(max(1, round(1000 / (self.source.fps * self.speed))))
-        self.btn_play.setText("⏸")
+        #self.btn_play.setText("⏸")
+        self.btn_play.setIcon(self.icon_pause)
 
     def pause(self):
         self.timer.stop()
-        self.btn_play.setText("▶")
+        #self.btn_play.setText("▶")
+        self.btn_play.setIcon(self.icon_play)
 
     def _tick(self):
         if self.current >= self.source.frame_count - 1:
