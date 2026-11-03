@@ -8,15 +8,17 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QLabel,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .. import settings
-from .player import WheelStepper
+from .wheel import WheelStepper
 
 
 class ScrollTestPad(QWidget):
@@ -55,12 +57,13 @@ class ScrollTestPad(QWidget):
                    f"frame {self.frame:+d}")
 
 
-class ScrollSettingsDialog(QDialog):
+class SettingsDialog(QDialog):
     """Changes apply live (so the test pad uses them); Cancel puts them back."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Scroll & touchpad settings")
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(460)
         self._original = settings.wheel.copy()
         w = settings.wheel
 
@@ -85,11 +88,19 @@ class ScrollSettingsDialog(QDialog):
         self.shift.setPrefix("× ")
         self.shift.setValue(w.shift_multiplier)
 
+        self.jog = QSpinBox()
+        self.jog.setRange(2, 90)
+        self.jog.setSuffix("° per frame")
+        self.jog.setValue(w.jog_degrees_per_frame)
+        self.jog.setToolTip("How far to turn the on-screen jog wheel for one frame. "
+                            "Smaller = faster.")
+
         form = QFormLayout()
         form.addRow("Scroll up goes to:", self.direction)
         form.addRow("Mouse wheel, one click:", self.per_click)
         form.addRow("Touchpad sensitivity:", self.touchpad)
         form.addRow("Holding Shift multiplies by:", self.shift)
+        form.addRow("Jog wheel:", self.jog)
 
         note = QLabel("If the touchpad setting has no effect, your system is reporting the "
                       "touchpad as a mouse wheel (common on X11). Use the mouse wheel "
@@ -107,14 +118,47 @@ class ScrollSettingsDialog(QDialog):
         buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(
             self._restore_defaults)
 
+        # One tab per group of settings; add new tabs here as the app grows.
+        scroll_tab = QWidget()
+        scroll_layout = QVBoxLayout(scroll_tab)
+        scroll_layout.addLayout(form)
+        scroll_layout.addWidget(ScrollTestPad())
+        scroll_layout.addWidget(note)
+
+        # Drawing tab
+        d = settings.drawing
+        self._original_drawing = d.copy()
+        self.hold = QDoubleSpinBox()
+        self.hold.setRange(0.0, 10.0)
+        self.hold.setSingleStep(0.1)
+        self.hold.setDecimals(1)
+        self.hold.setSuffix(" s either side")
+        self.hold.setValue(d.hold_seconds)
+        self.hold.setToolTip("How long a Hold drawing stays on screen before and after "
+                             "the frame it was drawn on. 0 = that frame only.")
+        self.thickness = QSpinBox()
+        self.thickness.setRange(2, 30)
+        self.thickness.setSuffix(" px")
+        self.thickness.setValue(d.line_width)
+        self.thickness.setToolTip("Line thickness for new drawings, as it looks when you draw")
+        draw_form = QFormLayout()
+        draw_form.addRow("Hold drawings for:", self.hold)
+        draw_form.addRow("Line thickness:", self.thickness)
+        draw_tab = QWidget()
+        draw_layout = QVBoxLayout(draw_tab)
+        draw_layout.addLayout(draw_form)
+        draw_layout.addStretch()
+
+        tabs = QTabWidget()
+        tabs.addTab(scroll_tab, "Scroll && jog wheel")
+        tabs.addTab(draw_tab, "Drawing")
+
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(ScrollTestPad())
-        layout.addWidget(note)
+        layout.addWidget(tabs)
         layout.addWidget(buttons)
 
         self.direction.currentIndexChanged.connect(self._apply_live)
-        for box in (self.per_click, self.touchpad, self.shift):
+        for box in (self.per_click, self.touchpad, self.shift, self.jog):
             box.valueChanged.connect(self._apply_live)
 
     def _current(self) -> settings.WheelSettings:
@@ -123,6 +167,7 @@ class ScrollSettingsDialog(QDialog):
             frames_per_click=self.per_click.value(),
             touchpad_px_per_frame=self.touchpad.value(),
             shift_multiplier=self.shift.value(),
+            jog_degrees_per_frame=self.jog.value(),
         )
 
     def _apply_live(self, *_):
@@ -134,12 +179,19 @@ class ScrollSettingsDialog(QDialog):
         self.per_click.setValue(d.frames_per_click)
         self.touchpad.setValue(d.touchpad_px_per_frame)
         self.shift.setValue(d.shift_multiplier)
+        self.jog.setValue(d.jog_degrees_per_frame)
+        self.hold.setValue(settings.DrawingSettings().hold_seconds)
+        self.thickness.setValue(settings.DrawingSettings().line_width)
 
     def accept(self):
         self._apply_live()
         settings.wheel.save()
+        settings.drawing.hold_seconds = round(self.hold.value(), 1)
+        settings.drawing.line_width = self.thickness.value()
+        settings.drawing.save()
         super().accept()
 
     def reject(self):
         settings.wheel.update_from(self._original)
+        settings.drawing.update_from(self._original_drawing)
         super().reject()

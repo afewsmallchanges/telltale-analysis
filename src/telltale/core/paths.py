@@ -34,3 +34,9 @@ def library_dir() -> Path:
     d = data_dir() / "library"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def projects_dir() -> Path:
+    d = data_dir() / "projects"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

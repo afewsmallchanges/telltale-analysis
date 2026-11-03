@@ -1,10 +1,8 @@
 # library.py
-# The clip library: every imported clip lives in its own folder under
-# paths.library_dir(), named by its clip id (see clip.py for the layout).
-#
-# A clip's id comes from the contents of the original file, not its name or
-# location, so a renamed or moved file is recognised instead of being
-# imported a second time.
+# The clip library: every imported clip lives in its own folder under paths.library_dir(), named by its clip id (see clip.py for the layout).
+
+
+# A clip's id comes from the contents of the original file, not its name or location, so a renamed or moved file is recognised instead of being imported a second time.
 
 from __future__ import annotations
 
@@ -67,7 +65,18 @@ class Library:
         return sorted(found, key=lambda c: c.imported_at)
 
     def size_on_disk(self, cid: str) -> int:
-        return sum(f.stat().st_size for f in (self.root / cid).rglob("*") if f.is_file())
+        # Bytes used by a clip's folder. Measured once, then kept in clip.json.
+        info = self.get(cid)
+        if info and info.disk_bytes:
+            return info.disk_bytes
+        total = _folder_bytes(self.root / cid)
+        if info:
+            info.disk_bytes = total
+            info.save()
+        return total
+
+    def total_size(self, clips: Optional[list[ClipInfo]] = None) -> int:
+        return sum(self.size_on_disk(c.id) for c in (clips if clips is not None else self.clips()))
 
     def remove(self, cid: str):
         shutil.rmtree(self.root / cid, ignore_errors=True)
@@ -125,7 +134,8 @@ class Library:
                 width=w,
                 height=h,
                 has_audio=has_audio,
-                imported_at=datetime.now().isoformat(timespec="seconds"),
+                imported_at=datetime.now().isoformat(timespec="microseconds"),  # orders batch imports
+                disk_bytes=_folder_bytes(work),
                 folder=str(work),
             )
             info.save()
@@ -138,3 +148,7 @@ class Library:
         if progress:
             progress(1.0)
         return info
+
+
+def _folder_bytes(folder: Path) -> int:
+    return sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())

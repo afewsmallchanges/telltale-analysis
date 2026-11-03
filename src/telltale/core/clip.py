@@ -40,6 +40,7 @@ class ClipInfo:
     height: int
     has_audio: bool = False
     imported_at: str = ""   # ISO date/time
+    disk_bytes: int = 0     # space used by this clip's folder (0 = not measured yet)
     version: int = FORMAT_VERSION
     # Not saved: where this clip's folder is right now.
     folder: str = field(default="", compare=False)

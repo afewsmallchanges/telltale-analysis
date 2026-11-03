@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     app = QApplication(argv)
     app.setApplicationName(APP_TITLE)
-    app.setDesktopFileName("telltale")
+    #app.setDesktopFileName("telltale") # uncomment when app package is produced.
     apply_dark_theme(app)
     win = MainWindow()
     win.show()
