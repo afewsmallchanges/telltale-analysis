@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_dark_theme(app)
     win = MainWindow()
     win.show()
-    if len(argv) > 1:
-        win.open_path(Path(argv[1]))
+    files = [Path(a) for a in argv[1:] if not a.startswith("-")]
+    if files:
+        win.import_paths(files, play_after=True)
     return app.exec()
