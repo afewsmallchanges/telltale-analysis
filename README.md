@@ -3,11 +3,15 @@
 A video playback and analysis application for reviewing sailing footage, with:
 
 1. Advanced playback speed control
+<img src="https://github.com/afewsmallchanges/telltale-analysis/blob/main/github-page/playback_settings.png" width="200" />
 2. Side-by-side viewing with easy syncing
+<img src="https://github.com/afewsmallchanges/telltale-analysis/blob/main/github-page/split.png" width="200" />
 3. Live video annotation with a collection of basic tools including pens, shapes and a timer
+<img src="https://github.com/afewsmallchanges/telltale-analysis/blob/main/github-page/drawing.png" width="200" />
 4. Clip -> Scene -> Project structure so you can create 'slide shows' of useful analyses
+<img src="https://github.com/afewsmallchanges/telltale-analysis/blob/main/github-page/project_scenes.png" width="200" />
 
-See [ROADMAP.md](ROADMAP.md) for what's planned.
+See [ROADMAP.md](ROADMAP.md) for current progress and what's planned next.
 
 ## Dependencies
 Python 3.10 or newer, plus one system library for Qt's X11 support (Wayland works without it).
@@ -17,12 +21,6 @@ Python 3.10 or newer, plus one system library for Qt's X11 support (Wayland work
 - [Windows](github-page/install-win.md)
 - [Mac](github-page/install-mac.md)
 
-## Images
-![image](github-page/playback_settings.png)
-![image](github-page/split.png)
-![image](github-page/drawing.png)
-
-<img src="https://github.com/afewsmallchanges/telltale-analysis/blob/main/github-page/drawing.png" width="200" />
 
 
 ## Attribution / Credit / License
