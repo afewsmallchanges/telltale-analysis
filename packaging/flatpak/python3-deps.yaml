@@ -1,0 +1,40 @@
+# Generated with flatpak-pip-generator --runtime org.kde.Sdk//6.10 --requirements-file packaging/flatpak/requirements-flatpak.txt --prefer-wheels numpy,opencv-python-headless,imageio-ffmpeg --wheel-arches x86_64 --yaml --output packaging/flatpak/python3-deps
+name: python3-deps
+buildsystem: simple
+build-commands: []
+modules:
+  - name: python3-opencv-python-headless
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "opencv-python-headless>=4.8" --no-build-isolation
+    sources:
+      - &id001
+        type: file
+        url: https://files.pythonhosted.org/packages/da/24/3bd070f3269dc609d8f26b2643f62ef91bb415841c0b294805aaf7fe06da/numpy-2.5.4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 6ffa07666f8da0eef81d149934a626d0d95fbd6838432a33e66245423a9062c0
+        only-arches:
+          - x86_64
+      - type: file
+        url: https://files.pythonhosted.org/packages/2b/97/8170e9819764c47e436c130d3ff6cfb73b58f923eae9d3a03d8982b04aec/opencv_python_headless-5.0.0.93-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: 09a872a157c1376ab922a69bbf22f9a95bcc7b658a9d8b436a60212b02b2eeb4
+        only-arches:
+          - x86_64
+  - name: python3-imageio-ffmpeg
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "imageio-ffmpeg>=0.5" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/de/0f/49292fbef69ee10ebcf97bb741602521caafcc6966d5fa1a2b868cc15655/imageio_ffmpeg-0.8.1-py3-none-manylinux_2_28_x86_64.whl
+        sha256: 050d6850601c3b3890bd2b28306f3b842b3daea390a561101174375a1c460bda
+        only-arches:
+          - x86_64
+  - name: python3-numpy
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "numpy>=1.24" --no-build-isolation
+    sources:
+      - *id001
