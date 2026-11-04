@@ -1,0 +1,10 @@
+# Python packages the Flatpak needs on top of io.qt.PySide.BaseApp (which
+# provides PySide6 and NumPy). Turned into python3-deps.yaml by
+# flatpak-pip-generator — see packaging/PACKAGING.md.
+opencv-python-headless>=4.8
+imageio-ffmpeg>=0.5
+# The BaseApp has NumPy already; listing it too means a version OpenCV accepts
+# is always available offline, should the BaseApp's not fit.
+numpy>=1.24
+# Needed to install the app itself offline (pyproject.toml asks for >= 77)
+setuptools>=77

@@ -1,0 +1,63 @@
+# Flatpak manifest for Telltale Analysis.
+# Build and install for yourself (from the repo root):
+#   flatpak run org.flatpak.Builder --user --install --force-clean \
+#     --install-deps-from=flathub build/flatpak \
+#     packaging/flatpak/io.github.afewsmallchanges.TelltaleAnalysis.yml
+# Full steps, including generating python3-deps.yaml: packaging/PACKAGING.md
+
+id: io.github.afewsmallchanges.TelltaleAnalysis
+runtime: org.kde.Platform
+runtime-version: '6.10'
+sdk: org.kde.Sdk
+# PySide6 (Qt for Python) ready-built for this runtime, so it isn't compiled here.
+base: io.qt.PySide.BaseApp
+base-version: '6.10'
+command: telltale
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Read videos anywhere in your home folder and on USB drives / SD cards.
+  # Imported clips are stored inside the app's own folder
+  # (~/.var/app/io.github.afewsmallchanges.TelltaleAnalysis/).
+  - --filesystem=home:ro
+  - --filesystem=/run/media:ro
+  - --filesystem=/media:ro
+
+build-options:
+  env:
+    # Not used by the app: leave it out to save ~200 MB.
+    - BASEAPP_REMOVE_WEBENGINE=1
+
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+
+modules:
+  # OpenCV, FFmpeg (imageio-ffmpeg), NumPy, setuptools — generated file
+  - python3-deps.yaml
+
+  - name: telltale
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-deps --no-build-isolation --prefix=${FLATPAK_DEST} .
+      # FFmpeg must stay executable inside the read-only app
+      - chmod +x ${FLATPAK_DEST}/lib/python3*/site-packages/imageio_ffmpeg/binaries/*
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      - install -Dm644 packaging/icons/telltale.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 packaging/icons/telltale-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+    sources:
+      - type: dir
+        path: ../..
+        # Don't copy build leftovers into the Flatpak build
+        skip:
+          - .git
+          - .venv
+          - .build-venv
+          - build
+          - dist
+          - .flatpak-builder
+          - flatpak_app
+          - repo

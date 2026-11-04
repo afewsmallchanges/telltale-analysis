@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Telltale Analysis
+GenericName=Video Analysis
+Comment=Frame-by-frame video review for sailing footage
+Exec=telltale %f
+Icon=io.github.afewsmallchanges.TelltaleAnalysis
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=video;sailing;analysis;frame;replay;review;
+MimeType=video/mp4;video/quicktime;video/x-matroska;video/x-msvideo;video/mp2t;video/webm;video/x-m4v;

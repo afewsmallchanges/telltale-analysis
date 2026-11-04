@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: what software centres (GNOME Software, KDE Discover,
+     Flathub) show about the app. -->
+<component type="desktop-application">
+  <id>io.github.afewsmallchanges.TelltaleAnalysis</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Telltale Analysis</name>
+  <summary>Frame-by-frame video review for sailing footage</summary>
+  <developer id="io.github.afewsmallchanges">
+    <name>afewsmallchanges</name>
+  </developer>
+  <description>
+    <p>
+      Review sailing footage the way TV sport analysts do: step through clips
+      frame by frame, compare up to four camera angles side by side in sync,
+      and draw on the video to point things out.
+    </p>
+    <ul>
+      <li>Frame-accurate stepping with the scroll wheel, touchpad or an on-screen jog wheel</li>
+      <li>Projects made of scenes, each showing up to four synced clips</li>
+      <li>Arrows, lines, circles and freehand drawing, pinned to their frame</li>
+      <li>Count-down / count-up timer against any frame</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.afewsmallchanges.TelltaleAnalysis.desktop</launchable>
+  <url type="homepage">https://github.com/afewsmallchanges/video-review</url>
+  <url type="bugtracker">https://github.com/afewsmallchanges/video-review/issues</url>
+  <provides>
+    <binary>telltale</binary>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-04">
+      <description>
+        <p>First packaged release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

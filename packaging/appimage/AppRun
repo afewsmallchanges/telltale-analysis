@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entry point of the AppImage: run the bundled app, passing on any file name.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/lib/telltale/telltale" "$@"
