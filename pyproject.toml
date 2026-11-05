@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telltale-analysis"
-version = "1.0.1"
+version = "1.0.0"
 description = "Frame-by-frame video review and analysis for sailing footage"
 readme = "README.md"
 license = "GPL-3.0-or-later"

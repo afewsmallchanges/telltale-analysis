@@ -3,11 +3,11 @@
 ; Windows installer, dist\Telltale-Analysis-<version>-Setup.exe.
 ;
 ; Build (from the repo root, after running PyInstaller):
-;   ISCC.exe /DAppVersion=0.1.0 packaging\windows\telltale.iss
+;   ISCC.exe /DAppVersion=1.0.0 packaging\windows\telltale.iss
 ; Paths below are relative to this file.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "1.0.0"
 #endif
 #define AppName "Telltale Analysis"
 #define AppExe "telltale.exe"
