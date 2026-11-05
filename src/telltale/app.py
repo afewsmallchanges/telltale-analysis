@@ -25,15 +25,19 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     
     if sys.platform == "win32":
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserMode1ID(APP_ID)
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserMode1ID(APP_ID)
+        except (AttributeError, OSError):
+            pass
 
+    if packaged():
+        #app.setDesktopFileName(APP_ID)
+        QApplication.setDesktopFileName(APP_ID)
 
     app = QApplication(argv)
     app.setApplicationName(APP_TITLE)
     app.setWindowIcon(QIcon(str(ICON_DIR / "telltale.svg")))
-    if packaged():
-        app.setDesktopFileName(APP_ID)
     apply_dark_theme(app)
     
     win = MainWindow()
@@ -41,7 +45,4 @@ def main(argv: list[str] | None = None) -> int:
     if len(argv) > 1:
         win.import_paths([Path(a) for a in argv[1:]], play_after=True)
 
-    # files = [Path(a) for a in argv[1:] if not a.startswith("-")]
-    # if files:
-    #     win.import_paths(files, play_after=True)
     return app.exec()

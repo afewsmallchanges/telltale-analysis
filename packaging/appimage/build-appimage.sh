@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 # build-appimage.sh
 # Builds dist/Telltale_Analysis-<version>-x86_64.AppImage.
-#
-# Run from anywhere inside the repo, ideally in an Ubuntu 22.04 container
-# (see packaging/PACKAGING.md): an AppImage only runs on systems at least as
-# new as the one it was built on, so building on an older base makes it work
-# on more distros.
+
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -13,12 +9,23 @@ cd "$(dirname "$0")/../.."
 APP_ID=io.github.afewsmallchanges.TelltaleAnalysis
 APPDIR=build/AppDir
 
-# 1. A clean virtual environment with the app and PyInstaller
-python3 -m venv .build-venv
+# # 1. A clean virtual environment with the app and PyInstaller
+
+# python3 -m venv .build-venv
+# # shellcheck disable=SC1091
+# . .build-venv/bin/activate
+# python -m pip install --upgrade pip
+# python -m pip install . pyinstaller
+
+#    PYTHON picks the interpreter (python3.12 in the GitHub build).
+PYTHON="${PYTHON:-python3}"
+"$PYTHON" -m venv --clear .build-venv
 # shellcheck disable=SC1091
 . .build-venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install . pyinstaller
+
+
 
 # The installed app's version, wherever pyproject.toml gets it from
 VERSION=$(python -c "from importlib.metadata import version; print(version('telltale-analysis'))")
