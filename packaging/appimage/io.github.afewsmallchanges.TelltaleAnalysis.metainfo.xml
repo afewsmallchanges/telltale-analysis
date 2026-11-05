@@ -6,13 +6,13 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Telltale Analysis</name>
-  <summary>Frame-by-frame video review for sailing footage</summary>
+  <summary>Frame-by-frame video review tool for athletes, coaches and parents.</summary>
   <developer id="io.github.afewsmallchanges">
     <name>afewsmallchanges</name>
   </developer>
   <description>
     <p>
-      Review sailing footage the way TV sport analysts do: step through clips
+      Review footage the way TV sport analysts do: step through clips
       frame by frame, compare up to four camera angles side by side in sync,
       and draw on the video to point things out.
     </p>
@@ -24,8 +24,8 @@
     </ul>
   </description>
   <launchable type="desktop-id">io.github.afewsmallchanges.TelltaleAnalysis.desktop</launchable>
-  <url type="homepage">https://github.com/afewsmallchanges/video-review</url>
-  <url type="bugtracker">https://github.com/afewsmallchanges/video-review/issues</url>
+  <url type="homepage">https://github.com/afewsmallchanges/telltale-analysis</url>
+  <url type="bugtracker">https://github.com/afewsmallchanges/telltale-analysis/issues</url>
   <provides>
     <binary>telltale</binary>
   </provides>
@@ -36,7 +36,7 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.1.0" date="2026-11-04">
+    <release version="1.0.1" date="2026-11-05">
       <description>
         <p>First packaged release.</p>
       </description>
