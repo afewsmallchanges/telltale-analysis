@@ -18,7 +18,7 @@ APP_ID = "io.github.afewsmallchanges.TelltaleAnalysis"
 
 
 def packaged() -> bool:
-    return bool(getattr(sys, "frozen", False)) or "FLATPACK_ID" in os.environ
+    return bool(getattr(sys, "frozen", False)) or "FLATPAK_ID" in os.environ
 
 
 def main(argv: list[str] | None = None) -> int:

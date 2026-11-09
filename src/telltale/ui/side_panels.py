@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from .icons import icon
 from .jog_wheel import JogWheel
+from .library_screen import scene_summary
 
 PANEL_WIDTH = 190
 TOOL_SIZE = 64
@@ -280,9 +281,7 @@ class ScenesPanel(QWidget):
         self.subtitle.setText(project_name)
         self.list.clear()
         for sc in scenes:
-            n = len(sc.clip_ids())
-            item = QListWidgetItem(icons.get(sc.id) or QIcon(),
-                                   f"{sc.name}\n{n} clip{'' if n == 1 else 's'}")
+            item = QListWidgetItem(icons.get(sc.id) or QIcon(), f"{sc.name}\n{scene_summary(sc)}")
             item.setData(Qt.ItemDataRole.UserRole, sc.id)
             item.setToolTip(f"{sc.name}\nClick to open · right-click to rename or delete")
             self.list.addItem(item)

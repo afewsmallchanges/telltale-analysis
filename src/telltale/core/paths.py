@@ -40,3 +40,9 @@ def projects_dir() -> Path:
     d = data_dir() / "projects"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def boards_dir() -> Path:
+    d = data_dir() / "boards"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

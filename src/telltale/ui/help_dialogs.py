@@ -13,6 +13,7 @@ SHORTCUTS = [
         ("New project", "Ctrl+N"),
         ("New scene (in the current project)", "Ctrl+Shift+N"),
         ("Import clips", "Ctrl+I"),
+        ("Import boards (pictures, diagrams)", "Ctrl+B"),
         ("Rename project or scene", "F2"),
         ("Delete scene / remove clip", "Delete"),
         ("Select all", "Ctrl+A"),
@@ -22,7 +23,7 @@ SHORTCUTS = [
         ("Step 10 frames", "Shift+scroll, Shift+← / →"),
         ("Play / pause", "Space"),
         ("Start / end", "Home / End"),
-        ("Add a clip to an empty view", "Click its +"),
+        ("Add a clip or board to an empty view", "Click its +"),
         ("Switch scene", "Click it in the Scenes panel"),
         ("Zoom into part of the picture", "Crop button, then drag a box"),
     ]),
@@ -40,6 +41,14 @@ SHORTCUTS = [
         ("Undo (drawings, moves, deletes, clears)", "Ctrl+Z"),
         ("Deselect / put the tool down", "Esc"),
         ("Remove every drawing in the scene", "Edit → Clear All"),
+    ]),
+    ("Boards", [
+        ("See every board", "Boards, under All clips"),
+        ("Import boards", "Import boards… button, Ctrl+B, or drop pictures on the window"),
+        ("Put a board in a view", "Click the view's +, then the Boards tab"),
+        ("Replace or remove a board", "Right-click the view, or its ✕"),
+        ("Draw on a board", "As on a clip; Quick drawings stay until cleared"),
+        ("Rename / delete a board", "F2 / Delete in Boards"),
     ]),
     ("Timer", [
         ("Start it / change mode", "Click Timer: DN, UP or D/U"),
@@ -103,5 +112,7 @@ def show_about(parent=None, app_title: str = "Telltale Analysis"):
         f"<h3>{app_title}</h3>"
         f"<p>Version {app_version()}</p>"
         "<p>Frame-by-frame video review and analysis for sailing footage.</p>"
-        "<p>Free software, licensed under the GNU General Public License v3 or later.</p>",
+        "<p>Free software, licensed under the GNU General Public License v3 or later.</p>"
+        "<p>Report issues or suggest new features on the GitHub issues page "
+        "<a href='https://github.com/afewsmallchanges/telltale-analysis/issues'>here</a>.</p>",
     )

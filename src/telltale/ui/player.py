@@ -10,7 +10,7 @@
 #
 # In split view every clip moves together (main timeline, jog wheel, arrow
 # keys, play); each clip's own coloured bar sets its sync point. The maths
-# is in core/sync.py.
+# is in core/sync.py. A board takes no part in the timeline, but can be zoomed and drawn on.
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import settings
+from ..core.boards import BoardInfo, load_image
 from ..core.clip import ClipInfo
 from ..core.frames import FrameSource
 from ..core.projects import DEFAULT_LAYOUTS, Scene, SceneSlot, valid_layout
@@ -259,8 +260,14 @@ class PlayerScreen(QWidget):
     def has_clip(self) -> bool:
         return bool(self.sync.loaded())
 
+    def has_content(self) -> bool:
+        return any(p.has_content for p in self.panes[:self.views_shown])
+
     def active_clip(self) -> Optional[ClipInfo]:
         return self.panes[self.active].clip
+
+    def active_item(self):
+        return self.panes[self.active].item
 
     # --- scenes -------------------------------------------------------------
     def clear(self):
@@ -280,15 +287,21 @@ class PlayerScreen(QWidget):
         self.refresh()
         self.activeClipChanged.emit()
 
-    def load_scene(self, scene: Scene, clips: dict[str, ClipInfo]):
-        # Show a saved scene: its views, clips, sync, zoom and position.
-        # `clips`: the library's clips by id (missing ones show as empty views).
+    def load_scene(self, scene: Scene, clips: dict[str, ClipInfo],
+                   boards: Optional[dict[str, BoardInfo]] = None):
+        # Show a saved scene: its views, clips, boards, sync, zoom and position.
+        # `clips` / `boards`: the libraries by id (missing ones show as empty views).
         self.clear()
         self._loading = True
         self.rows, self.cols = scene.rows, scene.cols
         self.views_shown = scene.rows * scene.cols
         self.sync.time = Fraction(scene.time)
         for i, slot in enumerate(scene.slots[:MAX_VIEWS]):
+            if slot is not None and slot.is_board:
+                board = (boards or {}).get(slot.board_id)
+                if board is not None:
+                    self._show_board(i, board, crop=slot.crop, saved_drawings=slot.drawings)
+                continue
             info = clips.get(slot.clip_id) if slot else None
             if info is None:
                 continue
@@ -312,13 +325,15 @@ class PlayerScreen(QWidget):
         for i in range(self.views_shown):
             pane = self.panes[i]
             off = self.sync.offset(i)
-            scene.slots.append(SceneSlot(pane.clip.id, str(off), pane.crop_list(),
-                                         list(pane.view.layer.hold))
-                               if pane.clip and off is not None else None)
+            if pane.board is not None:
+                scene.slots.append(SceneSlot(board_id=pane.board.id, crop=pane.crop_list(), drawings=list(pane.view.layer.hold)))
+            elif pane.clip and off is not None:
+                scene.slots.append(SceneSlot(pane.clip.id, str(off), pane.crop_list(), list(pane.view.layer.hold)))
+            else:
+                scene.slots.append(None)
         scene.time = str(self.sync.time)
         scene.active = self.active
-        scene.timer = ({"mode": self.timer_mode, "zero": str(self.timer_zero)}
-                       if self.timer_mode else None)
+        scene.timer = ({"mode": self.timer_mode, "zero": str(self.timer_zero)} if self.timer_mode else None)
 
     def _changed(self):
         if self.saving and not self._loading:
@@ -331,7 +346,7 @@ class PlayerScreen(QWidget):
             self.saveRequested.emit()
 
     def open_slots(self) -> list[int]:
-        return [i for i in range(self.views_shown) if self.panes[i].clip is None]
+        return [i for i in range(self.views_shown) if not self.panes[i].has_content]
 
     # --- loading clips ------------------------------------------------------
     def load_clip(self, info: ClipInfo, index: Optional[int] = None):
@@ -351,6 +366,32 @@ class PlayerScreen(QWidget):
         self.refresh()
         self.activeClipChanged.emit()
 
+    def load_board(self, board: BoardInfo, index: Optional[int] = None):
+        # Show `board` in view `index` (default: the selected view).
+        i = self.active if index is None else index
+        if i >= self.views_shown:
+            return
+        if i != self.active:
+            self.set_active(i)
+        pane = self.panes[i]
+        if pane.board and pane.board.id == board.id:
+            return
+        self.pause()
+        self._forget_undo(pane)
+        self._show_board(i, board)
+        self.refresh()
+        self.activeClipChanged.emit()
+
+    def _show_board(self, i: int, board: BoardInfo, crop: Optional[list] = None, saved_drawings: Optional[list] = None):
+        if self.sync.tracks[i] is not None:
+            self.sync.unload(i)  # a board has no place on the timeline
+        try:
+            picture = load_image(board)
+        except OSError:
+            self.panes[i].unload()
+            return
+        self.panes[i].load_board(board, picture, crop=crop, saved_drawings=saved_drawings)
+
     def _add_clicked(self, i: int):
         self.set_active(i)
         self.addClipRequested.emit(i)
@@ -365,9 +406,17 @@ class PlayerScreen(QWidget):
 
     def unload_clips(self, ids: list[str]):
         # Clips deleted from the library: stop showing them.
+        self._unload_where(lambda pane: pane.clip is not None and pane.clip.id in ids)
+
+    def unload_boards(self, ids: list[str]):
+        # Boards deleted: stop showing them.
+        self._unload_where(lambda pane: pane.board is not None and pane.board.id in ids)
+
+    def _unload_where(self, test):
         changed = False
         for i, pane in enumerate(self.panes):
-            if pane.clip and pane.clip.id in ids:
+            if test(pane):
+                self._forget_undo(pane)
                 self._unload(i)
                 changed = True
         if changed:
@@ -394,7 +443,7 @@ class PlayerScreen(QWidget):
         old = self.views_shown
         n = rows * cols
         for i in range(n, MAX_VIEWS):
-            if self.panes[i].clip:
+            if self.panes[i].has_content:
                 self._unload(i)
         self.rows, self.cols, self.views_shown = rows, cols, n
         # Adding views: select the first new (empty) one, ready for a clip.
@@ -404,8 +453,8 @@ class PlayerScreen(QWidget):
         self.activeClipChanged.emit()
 
     def remove_clip(self, i: int):
-        # Empty view i (it shows "+" again). Its drawings go with the clip.
-        if self.panes[i].clip is None:
+        # Empty view i (it shows "+" again). Its drawings go with the clip or board.
+        if not self.panes[i].has_content:
             return
         self.pause()
         self._unload(i)
@@ -443,11 +492,12 @@ class PlayerScreen(QWidget):
         i = self.panes.index(pane)
         self.set_active(i)
         menu = QMenu(self)
-        if pane.clip:
-            menu.addAction("Replace clip…").triggered.connect(lambda _c=False: self._add_clicked(i))
-            menu.addAction("Remove clip").triggered.connect(lambda _c=False: self.remove_clip(i))
+        if pane.has_content:
+            what = "board" if pane.board is not None else "clip"
+            menu.addAction("Replace…").triggered.connect(lambda _c=False: self._add_clicked(i))
+            menu.addAction(f"Remove {what}").triggered.connect(lambda _c=False: self.remove_clip(i))
         else:
-            menu.addAction("Add clip…").triggered.connect(lambda _c=False: self._add_clicked(i))
+            menu.addAction("Add clip or board…").triggered.connect(lambda _c=False: self._add_clicked(i))
         if self.views_shown > 1:
             menu.addSeparator()
             menu.addAction("Close view").triggered.connect(lambda _c=False: self.close_view(i))
@@ -765,7 +815,7 @@ class PlayerScreen(QWidget):
     def _update_overlay(self):
         pane = self.panes[self.active]
         view = pane.view
-        self.crop_btn.setEnabled(pane.clip is not None)
+        self.crop_btn.setEnabled(pane.has_content)
         self.crop_btn.setChecked(view.crop_mode or view.crop is not None)
         if view.crop is not None:
             self.crop_btn.setToolTip("Zoomed in — click to show the whole picture")

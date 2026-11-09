@@ -1,5 +1,6 @@
 # video_pane.py
-# One video in the player. Up to four sit side by side in split view.
+# One view in the player: a video clip, or a board (a still picture or
+# diagram). Up to four sit side by side in split view.
 #
 # PaneView shows the frame using QGraphicsView: the picture lives in "scene"
 # coordinates (video pixels), and the view maps them to the screen. Zooming
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from .. import settings
 from ..core import drawings
+from ..core.boards import BoardInfo
 from ..core.clip import ClipInfo
 from ..core.frames import FrameSource
 from .drawing_layer import Z_DRAWINGS, DrawingLayer, make_item
@@ -324,12 +326,14 @@ class PaneView(QGraphicsView):
 
 
 class VideoPane(QFrame):
-    # A PaneView plus, in split view, a header (✕ and clip name) and its own
-    # coloured sync bar for lining it up with the other clips.
+    # A PaneView plus, in split view, a header (✕ and name) and, for a clip,
+    # its own coloured sync bar for lining it up with the other clips.
+    # A board has no timeline: it shows the same picture whatever the frame,
+    # so its drawings (Quick and Hold) stay until they're cleared.
 
     activated = Signal()          # clicked: make this the selected pane
-    addRequested = Signal()       # its "+" was clicked, or "Replace clip…": choose a clip
-    removeClipRequested = Signal()  # ✕ on a view with a clip: empty it (shows "+")
+    addRequested = Signal()       # its "+" was clicked, or "Replace…": choose a clip or board
+    removeClipRequested = Signal()  # ✕ on a view with a clip or board: empty it (shows "+")
     closeRequested = Signal()       # ✕ on an empty view: close the view
     stepRequested = Signal(int)   # scrolled over the picture: move all clips
     syncScrubbed = Signal(int)    # its own bar dragged to this frame
@@ -340,6 +344,7 @@ class VideoPane(QFrame):
         self.setObjectName("pane")
         self.clip: Optional[ClipInfo] = None
         self.source: Optional[FrameSource] = None
+        self.board: Optional[BoardInfo] = None
         self._shown: Optional[int] = None
         self._active = False
         self._split = False
@@ -355,13 +360,13 @@ class VideoPane(QFrame):
         self.add_btn.setText("+")
         self.add_btn.setFixedSize(110, 110)
         self.add_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.add_btn.setToolTip("Add a clip from this project or the full library")
+        self.add_btn.setToolTip("Add a clip from this project or the full library, or a board")
         self.add_btn.setStyleSheet(
             "QToolButton { color: #8a8a92; background: transparent; font-size: 48pt;"
             " border: 2px dashed #4a4a52; border-radius: 10px; }"
             "QToolButton:hover { color: #f2f2f5; border-color: #8a8a92; }")
         self.add_btn.clicked.connect(lambda _c=False: self.addRequested.emit())
-        add_label = QLabel("Add a clip")
+        add_label = QLabel("Add a clip or board")
         add_label.setStyleSheet("color: #8a8a92;")
         add_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder = QFrame()
@@ -428,8 +433,16 @@ class VideoPane(QFrame):
     def set_split(self, on: bool):
         self._split = on
         self.header.setVisible(on)
-        self.sync_row.setVisible(on)
+        self.sync_row.setVisible(on and self.board is None)  # boards have no timeline
         self._update_border()
+
+    @property
+    def has_content(self) -> bool:
+        return self.clip is not None or self.board is not None
+
+    @property
+    def item(self):
+        return self.clip or self.board
 
     def set_active(self, on: bool):
         self._active = on
@@ -438,7 +451,7 @@ class VideoPane(QFrame):
 
     def update_clear_button(self):
         # Only on the selected view, and only when it has drawings showing.
-        show = self._active and self.clip is not None and bool(self.view.layer.visible())
+        show = self._active and self.has_content and bool(self.view.layer.visible())
         if show != self.view.clear_btn.isVisible():
             self.view.clear_btn.setVisible(show)
             if show:
@@ -446,14 +459,16 @@ class VideoPane(QFrame):
 
     def _close_clicked(self):
         # First ✕ empties the view; ✕ on an empty view closes it.
-        if self.clip is not None:
+        if self.has_content:
             self.removeClipRequested.emit()
         else:
             self.closeRequested.emit()
 
     def _update_close_tip(self):
-        self.close_btn.setToolTip("Remove this clip from the view" if self.clip
-                                  else "Close this view")
+        tip = ("Remove this board from the view" if self.board is not None
+               else "Remove this clip from the view" if self.clip is not None
+               else "Close this view")
+        self.close_btn.setToolTip(tip)
 
     def _update_border(self):
         colour = self.colour if (self._split and self._active) else "transparent"
@@ -464,9 +479,11 @@ class VideoPane(QFrame):
              saved_drawings: Optional[list] = None):
         self.clip = clip
         self.source = source
+        self.board = None
         self._shown = None
-        self.view.crop = None
-        self.view.layer.reset()
+        # Start clean: picture, zoom and drawings (the view may have shown a
+        # board or another clip of the same size, with a zoom of its own).
+        self.view.clear()
         self.view.layer.load(saved_drawings or [])
         self._pending_crop = crop  # applied once the first frame (and its size) is shown
         self.name.setText(clip.name)
@@ -477,11 +494,41 @@ class VideoPane(QFrame):
         self.sync_bar.setPageStep(max(1, round(source.fps)))
         self.sync_bar.blockSignals(False)
         self.sync_bar.setEnabled(True)
+        self.sync_row.setVisible(self._split)
         self.stack.setCurrentWidget(self.view)
+
+    def load_board(self, board: BoardInfo, picture, crop: Optional[list] = None,
+                   saved_drawings: Optional[list] = None):
+        # Show a board. `picture`: its RGB image (core.boards.load_image).
+        self.clip = None
+        self.source = None
+        self.board = board
+        self._shown = None
+        self.view.clear()
+        self.view.layer.load(saved_drawings or [])
+        self.view.set_frame(picture)
+        if crop:
+            self.view.crop = QRectF(*crop)
+            self.view.fit()
+        self._pending_crop = None
+        # A board is one picture: everything on it lives on "frame 0".
+        self.view.frame = 0
+        self.view.layer.set_frame(0, 0)
+        self.name.setText(f"{board.name}  (board)")
+        self.name.setToolTip(board.name)
+        self._update_close_tip()
+        self.sync_bar.blockSignals(True)
+        self.sync_bar.setRange(0, 0)
+        self.sync_bar.blockSignals(False)
+        self.sync_bar.setEnabled(False)
+        self.sync_row.setVisible(False)
+        self.stack.setCurrentWidget(self.view)
+        self.update_clear_button()
 
     def unload(self):
         self.clip = None
         self.source = None
+        self.board = None
         self._shown = None
         self.view.clear()
         self.view.set_crop_mode(False)
@@ -491,6 +538,7 @@ class VideoPane(QFrame):
         self.sync_bar.setRange(0, 0)
         self.sync_bar.blockSignals(False)
         self.sync_bar.setEnabled(False)
+        self.sync_row.setVisible(self._split)
         self.stack.setCurrentWidget(self.placeholder)
         self._update_close_tip()
         self.update_clear_button()

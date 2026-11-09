@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QMainWindow,
     QMenu,
@@ -20,21 +21,22 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import paths, timebase
+from ..core.boards import IMAGE_EXTENSIONS, BoardInfo, BoardLibrary, ImportFailed
 from ..core.clip import ClipInfo
 from ..core.library import Library
 from ..core.projects import MAX_CLIPS_PER_SCENE, ProjectStore
 from . import help_dialogs
 from .import_worker import ImportWorker
 from .dialogs import ClipPickerDialog, ask_choice, ask_name
-from .library_screen import LibraryScreen, plural, scene_icon
+from .library_screen import LibraryScreen, plural, scene_icon, scene_items
+from .picture_reader import read_picture
 from .player import PlayerScreen
 from .settings_dialog import SettingsDialog
 
 APP_TITLE = "Telltale Analysis"
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".mts", ".m2ts", ".ts", ".webm", ".mxf",
-                    ".m4v", ".lrv", ".insv", ".wmv"}
-VIDEO_FILTER = ("Video files (" + " ".join(f"*{e}" for e in sorted(VIDEO_EXTENSIONS))
-                + ");;All files (*)")
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".mts", ".m2ts", ".ts", ".webm", ".mxf", ".m4v", ".lrv", ".insv", ".wmv"}
+VIDEO_FILTER = ("Video files (" + " ".join(f"*{e}" for e in sorted(VIDEO_EXTENSIONS)) + ");;All files (*)")
+PICTURE_FILTER = ("Pictures and diagrams (" + " ".join(f"*{e}" for e in sorted(IMAGE_EXTENSIONS)) + ");;All files (*)")
 
 
 class MainWindow(QMainWindow):
@@ -45,13 +47,14 @@ class MainWindow(QMainWindow):
 
         self.library = Library()
         self.projects = ProjectStore()
+        self.boards = BoardLibrary()
 
         # What the player is showing: a saved scene, or an unsaved quick view.
         self.scene_pid: Optional[str] = None
         self.scene_id: Optional[str] = None
         self.quick = False
 
-        h = self.home = LibraryScreen(self.library, self.projects)
+        h = self.home = LibraryScreen(self.library, self.projects, self.boards)
         h.openClip.connect(self._ask_open_clip)
         h.quickView.connect(self.quick_view)
         h.newProjectFromClips.connect(self.new_project_from_clips)
@@ -60,6 +63,9 @@ class MainWindow(QMainWindow):
         h.newSceneRequested.connect(lambda pid: self.new_scene(pid))
         h.importRequested.connect(self.import_dialog)
         h.clipsDeleted.connect(self._clips_deleted)
+        h.importBoardsRequested.connect(self.import_boards_dialog)
+        h.openBoard.connect(self.quick_view)
+        h.boardsDeleted.connect(self._boards_deleted)
         h.entryChanged.connect(self._update_state)
 
         self.player = PlayerScreen()
@@ -111,6 +117,7 @@ class MainWindow(QMainWindow):
         self._action(file_menu, "&New project…", self.new_project, "Ctrl+N")
         self._action(file_menu, "New &scene", self._new_scene_here, "Ctrl+Shift+N")
         self._action(file_menu, "&Import clips…", self.import_dialog, "Ctrl+I")
+        self._action(file_menu, "Import &boards…", self.import_boards_dialog, "Ctrl+B")
         self._action(file_menu, "&Open clip…", self.open_dialog, Std.Open)
         file_menu.addSeparator()
         self._action(file_menu, "&Settings…", self.open_settings, "Ctrl+,")
@@ -181,7 +188,8 @@ class MainWindow(QMainWindow):
 
     def _update_state(self):
         on_library = self.stack.currentWidget() is self.home
-        self.act_rename.setEnabled(on_library and self.home.current_project_id() is not None)
+        self.act_rename.setEnabled(on_library and (self.home.current_project_id() is not None
+                                                   or self.home.on_boards()))
         self.act_delete.setEnabled(on_library or self.player.selected_drawing() is not None)
         self.act_select_all.setEnabled(on_library)
         self.act_library.setEnabled(not on_library)
@@ -194,8 +202,8 @@ class MainWindow(QMainWindow):
         if on_library:
             title = self.home.entry_title()
         elif self.quick:
-            clip = self.player.active_clip()
-            title = f"Quick view — {clip.name}" if clip else "Quick view"
+            item = self.player.active_item()
+            title = f"Quick view — {item.name}" if item else "Quick view"
         else:
             project = self.projects.get(self.scene_pid) if self.scene_pid else None
             scene = project.scene(self.scene_id) if project and self.scene_id else None
@@ -238,7 +246,8 @@ class MainWindow(QMainWindow):
             return
         self.scene_pid, self.scene_id, self.quick = pid, sid, False
         clips = {c.id: c for c in self.library.clips()}
-        self.player.load_scene(scene, clips)
+        boards = {b.id: b for b in self.boards.boards()}
+        self.player.load_scene(scene, clips, boards)
         self._refresh_scenes_panel()
         self._show_player_screen()
 
@@ -330,8 +339,8 @@ class MainWindow(QMainWindow):
         if not project:
             return
         clips = {c.id: c for c in self.library.clips()}
-        icons = {s.id: scene_icon([clips.get(slot.clip_id) if slot else None for slot in s.slots],
-                                  s.rows, s.cols)
+        boards = {b.id: b for b in self.boards.boards()}
+        icons = {s.id: scene_icon(scene_items(s, clips, boards), s.rows, s.cols)
                  for s in project.scenes}
         panel.set_scenes(project.name, project.scenes, self.scene_id, icons)
 
@@ -366,21 +375,25 @@ class MainWindow(QMainWindow):
         self.home.select_project(p.id)
         self.new_scene(p.id, clips[:MAX_CLIPS_PER_SCENE])
 
-    def quick_view(self, info: ClipInfo):
-        # Look at a clip without a project. Nothing is saved.
+    def quick_view(self, info: ClipInfo | BoardInfo):
+        # Look at a clip or board without a project. Nothing is saved.
         self.player.flush_save()
         self.scene_pid = self.scene_id = None
         self.quick = True
         self.player.clear()
-        self.player.load_clip(info, 0)
+        if isinstance(info, BoardInfo):
+            self.player.load_board(info, 0)
+        else:
+            self.player.load_clip(info, 0)
         self._refresh_scenes_panel()
         self._show_player_screen()
 
     def save_quick_view(self):
-        # Turn the quick view into a project with one scene (keeping sync and zoom).
-        clips = [p.clip for p in self.player.panes[:self.player.views_shown] if p.clip]
-        if not clips:
+        # Turn the quick view into a project with one scene (keeping sync,
+        # zoom, boards and drawings).
+        if not self.player.has_content():
             return
+        clips = [p.clip for p in self.player.panes[:self.player.views_shown] if p.clip]
         name = ask_name(self, "Save as project", "Project name:", self.projects.unique_name())
         if name is None:
             return
@@ -396,24 +409,33 @@ class MainWindow(QMainWindow):
         self.open_scene(p.id, scene.id)
 
     def _add_clip_to_view(self, i: int):
-        # A view's "+": pick a clip from this project or the full library.
+        # A view's "+": pick a clip from this project or the full library, or a board.
         all_clips = list(reversed(self.library.clips()))
+        boards = list(reversed(self.boards.boards()))  # newest first
         project = self.projects.get(self.scene_pid) if self.scene_pid else None
         if project:
             by_id = {c.id: c for c in all_clips}
             project_clips = [by_id[cid] for cid in project.clip_ids if cid in by_id]
-            dialog = ClipPickerDialog(project.name, project_clips, all_clips, self)
+            dialog = ClipPickerDialog(project.name, project_clips, all_clips, boards, self)
         else:
-            dialog = ClipPickerDialog(None, None, all_clips, self)
-        if dialog.exec() and dialog.chosen:
-            if project:
-                self.projects.add_clips(project.id, [dialog.chosen.id])
-            self.player.load_clip(dialog.chosen, i)
+            dialog = ClipPickerDialog(None, None, all_clips, boards, self)
+        if not (dialog.exec() and dialog.chosen):
+            return
+        chosen = dialog.chosen
+        if isinstance(chosen, BoardInfo):
+            self.player.load_board(chosen, i)  # boards aren't added to the project's clips
+            return
+        if project:
+            self.projects.add_clips(project.id, [chosen.id])
+        self.player.load_clip(chosen, i)
 
     def _active_clip_changed(self):
         self._update_state()
+        item = self.player.active_item()
         info = self.player.active_clip()
-        if info:
+        if isinstance(item, BoardInfo):
+            self.statusBar().showMessage(f"{item.name}   {item.width}×{item.height}   board")
+        elif info:
             sound = "" if info.has_audio else "   no audio"
             self.statusBar().showMessage(
                 f"{info.name}   {info.width}×{info.height}   "
@@ -425,6 +447,11 @@ class MainWindow(QMainWindow):
     def _clips_deleted(self, ids: list):
         self.player.unload_clips(ids)
         self.player.save_timer.stop()  # the library already removed them from scenes
+        self._update_state()
+
+    def _boards_deleted(self, ids: list):
+        self.player.unload_boards(ids)
+        self.player.save_timer.stop()  # already removed from the scenes on disk
         self._update_state()
 
     # --- importing ----------------------------------------------------------
@@ -444,19 +471,25 @@ class MainWindow(QMainWindow):
 
     def import_paths(self, paths_in: list[Path], play_after: bool = False):
         # Import videos into the library (and into the project being viewed, if
-        # any). Folders are expanded to the videos directly inside them.
-        if self._worker is not None:
-            self.statusBar().showMessage("Already importing — please wait for it to finish.")
-            return
-        files: list[Path] = []
+        # any), and pictures as boards. Folders are expanded to the videos and
+        # pictures directly inside them.
+        found: list[Path] = []
         for p in paths_in:
             if p.is_dir():
-                files += sorted(f for f in p.iterdir()
-                                if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS)
+                found += sorted(f for f in p.iterdir() if f.is_file()
+                                and f.suffix.lower() in VIDEO_EXTENSIONS | IMAGE_EXTENSIONS)
             else:
-                files.append(p)
+                found.append(p)
+        pictures = [f for f in found if f.suffix.lower() in IMAGE_EXTENSIONS]
+        files = [f for f in found if f.suffix.lower() not in IMAGE_EXTENSIONS]
+        if pictures:
+            self.import_boards(pictures, place=play_after)
         if not files:
-            self.statusBar().showMessage("No video files found to import.")
+            if not pictures:
+                self.statusBar().showMessage("No video or picture files found to import.")
+            return
+        if self._worker is not None:
+            self.statusBar().showMessage("Already importing — please wait for it to finish.")
             return
 
         self.player.pause()
@@ -484,6 +517,72 @@ class MainWindow(QMainWindow):
         self._progress.canceled.connect(worker.cancel_event.set)
         self._worker = worker
         worker.start()
+
+    # --- boards ---------------------------------------------------------------
+    def import_boards_dialog(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Import boards", str(Path.home()),
+                                                PICTURE_FILTER)
+        if not files:
+            return
+        imported = self.import_boards([Path(f) for f in files])
+        if imported and self.stack.currentWidget() is self.home:
+            self.home.show_boards()  # show what was just imported
+
+    def import_boards(self, files: list[Path], place: bool = False) -> list[BoardInfo]:
+        # Import pictures as boards. `place`: also put them in the player's
+        # empty views (e.g. pictures dropped on the player).
+        imported: list[BoardInfo] = []
+        errors: list[tuple[str, str]] = []
+        progress = None
+        if len(files) > 1:
+            progress = QProgressDialog("Importing boards…", "Cancel", 0, len(files), self)
+            progress.setWindowTitle("Importing boards")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(300)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for k, path in enumerate(files):
+                if progress is not None:
+                    if progress.wasCanceled():
+                        break
+                    progress.setLabelText(f"Importing {path.name}…")
+                    progress.setValue(k)
+                try:
+                    imported.append(self.boards.import_board(path, fallback=read_picture))
+                except (ImportFailed, OSError) as e:
+                    errors.append((path.name, str(e)))
+        finally:
+            QApplication.restoreOverrideCursor()
+            if progress is not None:
+                progress.reset()
+                progress.deleteLater()
+
+        if self.stack.currentWidget() is self.home:
+            self.home.refresh()
+        if errors:
+            shown = errors[:5]
+            text = "\n\n".join(f"{name}:\n{msg}" for name, msg in shown)
+            if len(errors) > len(shown):
+                text += f"\n\n…and {len(errors) - len(shown)} more."
+            QMessageBox.warning(self, "Could not import", text)
+        if not imported:
+            return imported
+
+        placed = 0
+        on_player = self.stack.currentWidget() is self.player
+        if place and on_player and (self.scene_id or self.quick):
+            for board in imported:
+                slots = self.player.open_slots()
+                if not slots:
+                    break
+                self.player.load_board(board, self.player.active
+                                       if self.player.active in slots else slots[0])
+                placed += 1
+        if placed < len(imported):
+            self.statusBar().showMessage(
+                f"Imported {plural(len(imported), 'board')}. Add one to a scene with a view's +"
+                " (Boards tab).", 8000)
+        return imported
 
     def _import_progress(self, fraction: float, label: str):
         if self._progress:

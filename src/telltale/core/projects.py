@@ -3,8 +3,7 @@
 #
 #   Project  a piece of work, e.g. "Race day 3"
 #     clips    the project's clips (ids of clips in the shared library)
-#     scenes   saved views of 1-4 of those clips, e.g. "Start" with the bow
-#              and drone cameras side by side, synced on the gun
+#     scenes   saved views of 1-4 of clips or boards.
 #
 #   <data>/projects/<project id>/project.json
 #
@@ -45,11 +44,16 @@ def _now() -> str:
 
 @dataclass
 class SceneSlot:
-    # One view in a scene.
-    clip_id: str
+    # Parameters for a scene window
+    clip_id: str = ""
+    board_id: str = ""                   
     offset: str = "0"                    # sync: seconds added to the scene clock (exact fraction)
     crop: Optional[list[float]] = None   # zoomed area [x, y, width, height] in video pixels
     drawings: list[Drawing] = field(default_factory=list)  # "Hold" drawings on this view
+
+    @property
+    def is_board(self) -> bool:
+        return bool(self.board_id) and not self.clip_id
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SceneSlot":
@@ -75,13 +79,17 @@ class Scene:
     modified_at: str = ""
 
     def clip_ids(self) -> list[str]:
-        return [s.clip_id for s in self.slots if s is not None]
+        return [s.clip_id for s in self.slots if s is not None and s.clip_id]
+
+    def board_ids(self) -> list[str]:
+        return [s.board_id for s in self.slots if s is not None and s.is_board]
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Scene":
         known = {f.name for f in fields(cls)}
         scene = cls(**{k: v for k, v in d.items() if k in known})
-        scene.slots = [SceneSlot.from_dict(s) if isinstance(s, dict) else None for s in scene.slots]
+        slots = [SceneSlot.from_dict(s) if isinstance(s, dict) else None for s in scene.slots]
+        scene.slots = [s if (s and (s.clip_id or s.board_id)) else None for s in slots] # A view with neither a clip nor a board is an empty view.
         rows, cols = int(scene.rows or 0), int(scene.cols or 0)
         views = max(1, min(MAX_CLIPS_PER_SCENE, int(scene.views)))
         if not valid_layout(rows, cols) or rows * cols != views:
@@ -165,6 +173,9 @@ class ProjectStore:
     def projects_using(self, clip_id: str) -> list[Project]:
         return [p for p in self.all() if clip_id in p.clip_ids]
 
+    def scenes_using_board(self, board_id: str) -> list[tuple[Project, Scene]]:
+        return [(p, s) for p in self.all() for s in p.scenes if board_id in s.board_ids()]
+
     def scenes_using(self, pid: str, clip_ids: Iterable[str]) -> list[Scene]:
         ids = set(clip_ids)
         p = self.get(pid)
@@ -213,6 +224,15 @@ class ProjectStore:
         # Call when a clip is deleted from the library.
         for p in self.projects_using(clip_id):
             self.remove_clips(p.id, [clip_id])
+
+    def forget_board(self, board_id: str):
+        # Call when a board is deleted: views showing it become empty ("+").
+        def remove(p: Project):
+            for scene in p.scenes:
+                scene.slots = [None if (s and s.is_board and s.board_id == board_id) else s
+                               for s in scene.slots]
+        for pid in {p.id for p, _s in self.scenes_using_board(board_id)}:
+            self._change(pid, remove)
 
     # --- scenes -------------------------------------------------------------
     def create_scene(self, pid: str, clip_ids: Iterable[str] = (),
