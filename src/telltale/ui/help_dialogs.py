@@ -13,16 +13,19 @@ SHORTCUTS = [
         ("New project", "Ctrl+N"),
         ("New scene (in the current project)", "Ctrl+Shift+N"),
         ("Import clips", "Ctrl+I"),
+        ("Import boards (pictures, diagrams)", "Ctrl+B"),
         ("Rename project or scene", "F2"),
         ("Delete scene / remove clip", "Delete"),
         ("Select all", "Ctrl+A"),
+        ("Unload a project (free disk space)", "Right-click it → Unload"),
+        ("Load it again", "Right-click → Load, or open one of its scenes"),
     ]),
     ("Player", [
         ("Step 1 frame", "Scroll, jog wheel, ← / →, , / ."),
         ("Step 10 frames", "Shift+scroll, Shift+← / →"),
         ("Play / pause", "Space"),
         ("Start / end", "Home / End"),
-        ("Add a clip to an empty view", "Click its +"),
+        ("Add a clip or board to an empty view", "Click its +"),
         ("Switch scene", "Click it in the Scenes panel"),
         ("Zoom into part of the picture", "Crop button, then drag a box"),
     ]),
@@ -37,9 +40,18 @@ SHORTCUTS = [
         ("Move it", "Drag it"),
         ("Delete it", "Delete or Backspace, or right-click → Delete drawing"),
         ("Recolour / restyle it", "Pick a colour or Solid / Dashed while it's selected"),
-        ("Undo (drawings, moves, deletes, clears)", "Ctrl+Z"),
+        ("Undo (drawings, moves, deletes, clears)", "Ctrl+Z, or Undo under the colours"),
+        ("Redo what was undone", "Ctrl+Shift+Z or Ctrl+Y, or Redo"),
         ("Deselect / put the tool down", "Esc"),
         ("Remove every drawing in the scene", "Edit → Clear All"),
+    ]),
+    ("Boards", [
+        ("See every board", "Boards, under All clips"),
+        ("Import boards", "Import boards… button, Ctrl+B, or drop pictures on the window"),
+        ("Put a board in a view", "Click the view's +, then the Boards tab"),
+        ("Replace or remove a board", "Right-click the view, or its ✕"),
+        ("Draw on a board", "As on a clip; Quick drawings stay until cleared"),
+        ("Rename / delete a board", "F2 / Delete in Boards"),
     ]),
     ("Timer", [
         ("Start it / change mode", "Click Timer: DN, UP or D/U"),
@@ -103,5 +115,7 @@ def show_about(parent=None, app_title: str = "Telltale Analysis"):
         f"<h3>{app_title}</h3>"
         f"<p>Version {app_version()}</p>"
         "<p>Frame-by-frame video review and analysis for sailing footage.</p>"
-        "<p>Free software, licensed under the GNU General Public License v3 or later.</p>",
+        "<p>Free software, licensed under the GNU General Public License v3 or later.</p>"
+        "<p>Report issues or suggest new features on the GitHub issues page "
+        "<a href='https://github.com/afewsmallchanges/telltale-analysis/issues'>here</a>.</p>",
     )

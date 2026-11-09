@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from .icons import icon
 from .jog_wheel import JogWheel
+from .library_screen import scene_summary
 
 PANEL_WIDTH = 190
 TOOL_SIZE = 64
@@ -90,6 +91,8 @@ class ToolsPanel(QWidget):
     modeChanged = Signal(str)       # "quick" or "hold"
     styleChanged = Signal(str)      # "solid" or "dashed"
     colourChanged = Signal(str)
+    undoRequested = Signal()
+    redoRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -164,6 +167,30 @@ class ToolsPanel(QWidget):
             self.colour_buttons[value] = b
             colours.addWidget(b)
 
+        # Undo | Redo (drawings), side by side
+        def history_button(text: str, icon_name: str, tip: str) -> QToolButton:
+            b = QToolButton()
+            b.setText(text)
+            b.setIcon(icon(icon_name))
+            b.setIconSize(QSize(18, 18))
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            b.setToolTip(tip)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            b.setEnabled(False)  # until there's something to undo / redo
+            return b
+
+        self.undo_btn = history_button("Undo", "undo", "Undo the last drawing change (Ctrl+Z)")
+        self.redo_btn = history_button("Redo", "redo", "Redo what was undone (Ctrl+Shift+Z)")
+        self.undo_btn.clicked.connect(lambda: self.undoRequested.emit())
+        self.redo_btn.clicked.connect(lambda: self.redoRequested.emit())
+        history = QHBoxLayout()
+        history.setSpacing(6)
+        history.addWidget(self.undo_btn)
+        history.addWidget(self.redo_btn)
+
+
+        # Jog wheel
         self.jog = JogWheel()
 
         layout = QVBoxLayout(self)
@@ -175,6 +202,7 @@ class ToolsPanel(QWidget):
         layout.addLayout(modes)
         layout.addLayout(styles)
         layout.addLayout(colours)
+        layout.addLayout(history)
         layout.addSpacing(2)
         layout.addWidget(self.jog, 1)
 
@@ -205,6 +233,9 @@ class ToolsPanel(QWidget):
         self.colour_buttons[colour].setChecked(True)
         self.colourChanged.emit(colour)
 
+    def set_history(self, can_undo: bool, can_redo: bool):
+        self.undo_btn.setEnabled(can_undo)
+        self.redo_btn.setEnabled(can_redo)
 
 class ScenesPanel(QWidget):
     # The project's scenes. Click one to open it; "+" starts a new scene.
@@ -280,9 +311,7 @@ class ScenesPanel(QWidget):
         self.subtitle.setText(project_name)
         self.list.clear()
         for sc in scenes:
-            n = len(sc.clip_ids())
-            item = QListWidgetItem(icons.get(sc.id) or QIcon(),
-                                   f"{sc.name}\n{n} clip{'' if n == 1 else 's'}")
+            item = QListWidgetItem(icons.get(sc.id) or QIcon(), f"{sc.name}\n{scene_summary(sc)}")
             item.setData(Qt.ItemDataRole.UserRole, sc.id)
             item.setToolTip(f"{sc.name}\nClick to open · right-click to rename or delete")
             self.list.addItem(item)

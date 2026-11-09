@@ -1,10 +1,15 @@
 # library_screen.py
-# The start screen. Left: "All clips" plus each project. Right: for a
-# project, its Scenes and Clips tabs; for All clips, every imported clip.
+# The start screen. Left: "All clips", "Boards", then each project. Right:
+# for a project, its Scenes and Clips tabs; for All clips, every imported
+# clip; for Boards, every imported picture or diagram.
 #
 # Clips live once in the shared library; projects only list clip ids, so a
 # clip can be in several projects. Removing a clip from a project keeps it in
 # the library; deleting it from the library removes it everywhere.
+#
+# Each project shows whether it's loaded or unloaded (its clips' frames
+# deleted to save space, core/storage.py). Unloading and loading are done by
+# the main window, as loading needs a background job.
 
 from __future__ import annotations
 
@@ -35,11 +40,15 @@ from PySide6.QtWidgets import (
 
 from .. import settings
 from ..core import timebase
+from ..core.boards import BoardInfo, BoardLibrary
 from ..core.clip import ClipInfo
 from ..core.library import Library
 from ..core.projects import DEFAULT_LAYOUTS, MAX_CLIPS_PER_SCENE, Project, ProjectStore, Scene
+from .icons import icon
 
 ALL_CLIPS = "__all__"           # sidebar entry id for "All clips"
+BOARDS = "__boards__"           # sidebar entry id for "Boards"
+LIBRARY_ENTRIES = (ALL_CLIPS, BOARDS)
 ROLE_ID = Qt.ItemDataRole.UserRole
 
 THUMB_SIZE = QSize(192, 108)    # 16:9 thumbnails
@@ -67,12 +76,32 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
+def scene_summary(scene: Scene) -> str:
+    # "2 clips", "1 clip · 1 board", "1 board"…
+    n_clips, n_boards = len(scene.clip_ids()), len(scene.board_ids())
+    parts = [plural(n_clips, "clip")] if (n_clips or not n_boards) else []
+    if n_boards:
+        parts.append(plural(n_boards, "board"))
+    return " · ".join(parts)
+
+
+def scene_items(scene: Scene, clips: dict[str, ClipInfo],
+                boards: Optional[dict[str, BoardInfo]] = None) -> list:
+    # What each of the scene's views shows: ClipInfo, BoardInfo or None.
+    boards = boards or {}
+    return [None if slot is None
+            else boards.get(slot.board_id) if slot.is_board
+            else clips.get(slot.clip_id)
+            for slot in scene.slots]
+
+
 # --- thumbnails -------------------------------------------------------------
 
 _thumb_cache: dict[tuple[str, float], QIcon] = {}
 
 
-def thumb_icon(clip: ClipInfo) -> QIcon:
+def thumb_icon(clip) -> QIcon:
+    # A clip's or board's thumbnail (both have .thumb_path).
     path = clip.thumb_path
     try:
         key = (str(path), path.stat().st_mtime)
@@ -85,9 +114,9 @@ def thumb_icon(clip: ClipInfo) -> QIcon:
     return icon
 
 
-def scene_icon(clips: list[Optional[ClipInfo]], rows: int = 0, cols: int = 0) -> QIcon:
-    # A scene's thumbnail: its clips' pictures laid out like its views
-    # (rows × cols), with "+" for empty views.
+def scene_icon(clips: list, rows: int = 0, cols: int = 0) -> QIcon:
+    # A scene's thumbnail: its clips' (or boards') pictures laid out like its
+    # views (rows × cols), with "+" for empty views.
     w, h = THUMB_SIZE.width() * 2, THUMB_SIZE.height() * 2  # drawn at 2x for sharpness
     pm = QPixmap(w, h)
     pm.fill(QColor(16, 16, 18))
@@ -141,13 +170,17 @@ class ClipGrid(QListWidget):
         for c in clips:
             details = (f"{format_duration(c.duration)} · {c.width}×{c.height} · "
                        f"{timebase.format_rate(c.rate)} fps")
-            item = QListWidgetItem(thumb_icon(c), f"{c.name}\n{details}")
+            loaded = c.has_frames
+            shown = details if loaded else f"{format_duration(c.duration)} · not loaded"
+            item = QListWidgetItem(thumb_icon(c), f"{c.name}\n{shown}")
             item.setData(ROLE_ID, c.id)
             item.setToolTip(
                 f"<b>{c.name}</b><br>{details}<br>{plural(c.frame_count, 'frame')}"
                 f"{'' if c.has_audio else ' · no audio'}<br>"
                 f"Imported {c.imported_at[:16].replace('T', ' ')}<br>"
                 f"Original: {c.source}"
+                + ("" if loaded else "<br><i>Not loaded: its frames were deleted when its "
+                   "project was unloaded. Opening it re-imports them from the original.</i>")
             )
             self.addItem(item)
             if c.id in keep:
@@ -161,11 +194,61 @@ class ClipGrid(QListWidget):
         return [self.clip_for(self.item(i)) for i in range(self.count())
                 if self.item(i).isSelected() and not self.item(i).isHidden()]
 
+    def selected_items(self) -> list:
+        return self.selected_clips()
+
     def filter(self, text: str):
         text = text.casefold().strip()
         for i in range(self.count()):
             item = self.item(i)
             item.setHidden(bool(text) and text not in self.clip_for(item).name.casefold())
+
+
+class BoardGrid(QListWidget):
+    # Thumbnail grid of boards (pictures and diagrams).
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setIconSize(THUMB_SIZE)
+        self.setGridSize(GRID_SIZE)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setMovement(QListView.Movement.Static)
+        self.setWordWrap(True)
+        self.setUniformItemSizes(True)
+        self.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._boards: dict[str, BoardInfo] = {}
+
+    def set_boards(self, boards: list[BoardInfo]):
+        keep = {b.id for b in self.selected_boards()}
+        self.clear()
+        self._boards = {b.id: b for b in boards}
+        for b in boards:
+            item = QListWidgetItem(thumb_icon(b), f"{b.name}\n{b.width}×{b.height} · board")
+            item.setData(ROLE_ID, b.id)
+            item.setToolTip(f"<b>{b.name}</b><br>{b.width}×{b.height} picture<br>"
+                            f"Imported {b.imported_at[:16].replace('T', ' ')}<br>"
+                            f"Original: {b.source}")
+            self.addItem(item)
+            if b.id in keep:
+                item.setSelected(True)
+
+    def board_for(self, item: QListWidgetItem) -> BoardInfo:
+        return self._boards[item.data(ROLE_ID)]
+
+    def selected_boards(self) -> list[BoardInfo]:
+        return [self.board_for(self.item(i)) for i in range(self.count())
+                if self.item(i).isSelected() and not self.item(i).isHidden()]
+
+    def selected_items(self) -> list:
+        return self.selected_boards()
+
+    def filter(self, text: str):
+        text = text.casefold().strip()
+        for i in range(self.count()):
+            item = self.item(i)
+            item.setHidden(bool(text) and text not in self.board_for(item).name.casefold())
 
 
 def _menu_action(menu: QMenu, text: str, slot: Callable[[], object], enabled: bool = True):
@@ -196,14 +279,14 @@ class SceneGrid(QListWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._scenes: dict[str, Scene] = {}
 
-    def set_scenes(self, scenes: list[Scene], clips: dict[str, ClipInfo]):
+    def set_scenes(self, scenes: list[Scene], clips: dict[str, ClipInfo],
+                   boards: Optional[dict[str, BoardInfo]] = None):
         keep = {s.id for s in self.selected_scenes()}
         self.clear()
         self._scenes = {s.id: s for s in scenes}
         for s in scenes:
-            in_view = [clips.get(slot.clip_id) if slot else None for slot in s.slots]
-            n = len(s.clip_ids())
-            item = QListWidgetItem(scene_icon(in_view, s.rows, s.cols), f"{s.name}\n{plural(n, 'clip')}")
+            in_view = scene_items(s, clips, boards)
+            item = QListWidgetItem(scene_icon(in_view, s.rows, s.cols), f"{s.name}\n{scene_summary(s)}")
             item.setData(ROLE_ID, s.id)
             names = ", ".join(c.name for c in in_view if c) or "no clips yet"
             item.setToolTip(f"<b>{s.name}</b><br>{names}<br>Double-click to open")
@@ -235,19 +318,28 @@ class LibraryScreen(QWidget):
     openScene = Signal(str, str)             # project id, scene id
     newSceneRequested = Signal(str)          # project id
     importRequested = Signal()
+    importBoardsRequested = Signal()
+    openBoard = Signal(object)               # BoardInfo double-clicked or Open
     clipsDeleted = Signal(list)              # clip ids about to be deleted
-    entryChanged = Signal()                  # a different project / All clips / tab
+    boardsDeleted = Signal(list)             # board ids about to be deleted
+    entryChanged = Signal()                  # a different project / All clips / Boards / tab
+    loadProjectRequested = Signal(str)       # project id
+    unloadProjectRequested = Signal(str)     # project id
 
-    def __init__(self, library: Library, projects: ProjectStore, parent=None):
+    def __init__(self, library: Library, projects: ProjectStore, boards: BoardLibrary,
+                 parent=None):
         super().__init__(parent)
         self.library = library
         self.projects = projects
+        self.boards = boards
         self._entry: str = str(settings.ui_value("library/entry", ALL_CLIPS) or ALL_CLIPS)
         self._all: list[ClipInfo] = []
+        self._boards: list[BoardInfo] = []
         self._project_list: list[Project] = []
 
         # Left: All clips + projects
         self.sidebar = QListWidget()
+        self.sidebar.setIconSize(QSize(18, 18))
         self.sidebar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.sidebar.customContextMenuRequested.connect(self._sidebar_menu)
         self.sidebar.currentItemChanged.connect(self._sidebar_changed)
@@ -279,6 +371,10 @@ class LibraryScreen(QWidget):
         self.import_btn = QPushButton("Import clips…")
         self.import_btn.setToolTip("Import video files (Ctrl+I). You can also drag them onto the window.")
         self.import_btn.clicked.connect(lambda: self.importRequested.emit())
+        self.import_boards_btn = QPushButton("Import boards…")
+        self.import_boards_btn.setToolTip("Import pictures or diagrams (PNG, JPEG, SVG…) "
+                                          "to show in scenes and draw on (Ctrl+B)")
+        self.import_boards_btn.clicked.connect(lambda: self.importBoardsRequested.emit())
         self.add_btn = QPushButton("Add from library…")
         self.add_btn.setToolTip("Add clips you've already imported to this project")
         self.add_btn.clicked.connect(lambda: self.add_from_library())
@@ -288,7 +384,8 @@ class LibraryScreen(QWidget):
         top = QHBoxLayout()
         top.addWidget(self.title, 1)
         top.addWidget(self.search)
-        for b in (self.new_scene_btn, self.import_btn, self.add_btn, self.open_btn):
+        for b in (self.new_scene_btn, self.import_btn, self.import_boards_btn, self.add_btn,
+                  self.open_btn):
             top.addWidget(b)
 
         # Scenes tab
@@ -321,6 +418,46 @@ class LibraryScreen(QWidget):
         self.tabs.addTab(self.pages, "Clips")
         self.tabs.currentChanged.connect(lambda _i: self._tab_changed())
 
+        # Boards (shown instead of the tabs when "Boards" is chosen)
+        self.board_grid = BoardGrid()
+        self.board_grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.board_grid.customContextMenuRequested.connect(self._board_menu)
+        self.board_grid.itemActivated.connect(
+            lambda item: self.openBoard.emit(self.board_grid.board_for(item)))
+        self.board_grid.itemSelectionChanged.connect(self._update_buttons)
+        self.boards_empty = _empty_label(
+            "No boards yet.\n\nBoards are pictures or diagrams — a course map, a start-line "
+            "plan, a rules diagram — that you can put in a scene and draw on.\n\n"
+            "Click Import boards…, or drag picture files onto the window.")
+        self.board_pages = QStackedWidget()
+        self.board_pages.addWidget(self.board_grid)
+        self.board_pages.addWidget(self.boards_empty)
+
+        self.body = QStackedWidget()
+        self.body.addWidget(self.tabs)
+        self.body.addWidget(self.board_pages)
+
+        # Shown above the tabs for an unloaded project.
+        self.unloaded_bar = QWidget()
+        self.unloaded_bar.setObjectName("unloadedBar")
+        self.unloaded_bar.setStyleSheet(
+            "#unloadedBar { background: #2a2a30; border: 1px solid #44444c; border-radius: 6px; }")
+        self.unloaded_icon = QLabel()
+        self.unloaded_icon.setPixmap(icon("project_unloaded").pixmap(QSize(22, 22)))
+        self.unloaded_text = QLabel()
+        self.unloaded_text.setWordWrap(True)
+        self.load_btn = QPushButton("Load")
+        self.load_btn.setToolTip("Re-import this project's frames from the original videos")
+        self.load_btn.clicked.connect(
+            lambda: self.current_project_id() and self.loadProjectRequested.emit(
+                self.current_project_id()))
+        bar_layout = QHBoxLayout(self.unloaded_bar)
+        bar_layout.setContentsMargins(10, 6, 10, 6)
+        bar_layout.addWidget(self.unloaded_icon)
+        bar_layout.addWidget(self.unloaded_text, 1)
+        bar_layout.addWidget(self.load_btn)
+        self.unloaded_bar.hide()
+
         self.footer = QLabel()
         self.footer.setStyleSheet("color: gray;")
 
@@ -328,7 +465,8 @@ class LibraryScreen(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 8, 8, 8)
         right_layout.addLayout(top)
-        right_layout.addWidget(self.tabs, 1)
+        right_layout.addWidget(self.unloaded_bar)
+        right_layout.addWidget(self.body, 1)
         right_layout.addWidget(self.footer)
 
         split = QSplitter()
@@ -344,18 +482,32 @@ class LibraryScreen(QWidget):
 
     # --- what's selected ----------------------------------------------------
     def current_project_id(self) -> Optional[str]:
-        return None if self._entry == ALL_CLIPS else self._entry
+        return None if self._entry in LIBRARY_ENTRIES else self._entry
+
+    def on_boards(self) -> bool:
+        return self._entry == BOARDS
 
     def current_project(self) -> Optional[Project]:
         pid = self.current_project_id()
         return next((p for p in self._project_list if p.id == pid), None)
 
     def entry_title(self) -> str:
+        if self.on_boards():
+            return "Boards"
         p = self.current_project()
         return p.name if p else "All clips"
 
     def on_scenes_tab(self) -> bool:
         return self.current_project() is not None and self.tabs.currentIndex() == SCENES_TAB
+
+    def can_rename(self) -> bool:
+        # Edit > Rename: a project, or (in Boards) the selected board.
+        return self.current_project_id() is not None or (
+            self.on_boards() and bool(self.board_grid.selected_boards()))
+
+    def show_boards(self):
+        self._set_entry(BOARDS)
+        self.refresh()
 
     def select_project(self, pid: str, tab: int = SCENES_TAB):
         self._set_entry(pid)
@@ -366,8 +518,9 @@ class LibraryScreen(QWidget):
     def refresh(self):
         # Re-read the library and projects from disk and redraw.
         self._all = self.library.clips()
+        self._boards = self.boards.boards()
         self._project_list = self.projects.all()
-        if self._entry != ALL_CLIPS and not self.current_project():
+        if self._entry not in LIBRARY_ENTRIES and not self.current_project():
             self._set_entry(ALL_CLIPS)  # the remembered project was deleted
         self._fill_sidebar()
         self._show_entry()
@@ -386,6 +539,13 @@ class LibraryScreen(QWidget):
         all_item.setFont(f)
         sb.addItem(all_item)
 
+        boards_item = QListWidgetItem(f"Boards  ·  {len(self._boards)}")
+        boards_item.setData(ROLE_ID, BOARDS)
+        boards_item.setToolTip("Pictures and diagrams to show in scenes and draw on.\n"
+                               "Import them here (Import boards…)")
+        boards_item.setFont(f)
+        sb.addItem(boards_item)
+
         header = QListWidgetItem("PROJECTS")
         header.setFlags(Qt.ItemFlag.NoItemFlags)
         hf = header.font()
@@ -396,13 +556,19 @@ class LibraryScreen(QWidget):
         header.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         sb.addItem(header)
 
-        current = all_item
+        current = boards_item if self._entry == BOARDS else all_item
         for p in self._project_list:
             n_clips = sum(1 for cid in p.clip_ids if cid in existing)
-            item = QListWidgetItem(f"{p.name}  ·  {len(p.scenes)}")
+            state = ("Unloaded: its frames were deleted to save space.\n"
+                     "Right-click → Load to re-import them." if p.unloaded else
+                     "Loaded. Right-click → Unload to free disk space.")
+            item = QListWidgetItem(icon("project_unloaded" if p.unloaded else "project_loaded"),
+                                   f"{p.name}  ·  {len(p.scenes)}")
             item.setData(ROLE_ID, p.id)
             item.setToolTip(f"{p.name}\n{plural(len(p.scenes), 'scene')}, "
-                            f"{plural(n_clips, 'clip')}\nRight-click to rename or delete")
+                            f"{plural(n_clips, 'clip')}\n{state}")
+            if p.unloaded:
+                item.setForeground(QColor(150, 150, 158))
             sb.addItem(item)
             if p.id == self._entry:
                 current = item
@@ -435,9 +601,18 @@ class LibraryScreen(QWidget):
     def _show_entry(self):
         project = self.current_project()
         by_id = {c.id: c for c in self._all}
+        boards_by_id = {b.id: b for b in self._boards}
+        boards = self.on_boards()
+        self.body.setCurrentWidget(self.board_pages if boards else self.tabs)
+        if boards:
+            shown = list(reversed(self._boards))  # newest first
+            self.board_grid.set_boards(shown)
+            self.board_pages.setCurrentWidget(self.board_grid if shown else self.boards_empty)
+            self.footer.setText(f"{plural(len(shown), 'board')} · "
+                                f"{format_bytes(self.boards.total_size(shown))}")
         if project:
             clips = [by_id[cid] for cid in project.clip_ids if cid in by_id]
-            self.scene_grid.set_scenes(project.scenes, by_id)
+            self.scene_grid.set_scenes(project.scenes, by_id, boards_by_id)
             self.scene_pages.setCurrentWidget(self.scene_grid if project.scenes else self.scenes_empty)
             self.empty.setText(
                 "This project has no clips yet.\n\n"
@@ -445,17 +620,29 @@ class LibraryScreen(QWidget):
                 "or Add from library… to use clips you've already imported.")
             self.footer.setText(
                 f"{plural(len(project.scenes), 'scene')} · {plural(len(clips), 'clip')} · "
-                f"{format_bytes(self.library.total_size(clips))}")
+                f"{format_bytes(self.library.total_size(clips))}"
+                + (" · unloaded" if project.unloaded else ""))
         else:
             clips = list(reversed(self._all))  # newest first
             self.scene_grid.set_scenes([], by_id)
             self.empty.setText("No clips yet.\n\nDrag videos onto the window, or click Import clips…")
-            self.footer.setText(
-                f"{plural(len(clips), 'clip')} · {format_bytes(self.library.total_size(clips))}")
+            if not boards:
+                self.footer.setText(
+                    f"{plural(len(clips), 'clip')} · {format_bytes(self.library.total_size(clips))}")
             if self.tabs.currentIndex() != CLIPS_TAB:
                 self.tabs.blockSignals(True)
                 self.tabs.setCurrentIndex(CLIPS_TAB)
                 self.tabs.blockSignals(False)
+        unloaded = project is not None and project.unloaded
+        if unloaded:
+            missing = sum(1 for c in clips if not c.has_frames)
+            self.unloaded_text.setText(
+                "<b>This project is unloaded.</b> Its clips' frames were deleted to save disk "
+                "space; scenes, sync and drawings are kept. "
+                + (f"Load it to re-import {plural(missing, 'clip')} from the original videos "
+                   "before opening its scenes." if missing else
+                   "Its clips are all still loaded for other projects, so loading is instant."))
+        self.unloaded_bar.setVisible(unloaded)
         self.tabs.setTabVisible(SCENES_TAB, project is not None)
         self.tabs.tabBar().setVisible(project is not None)
         self.title.setText(self.entry_title())
@@ -472,19 +659,29 @@ class LibraryScreen(QWidget):
     def _filter(self, text: str):
         self.grid.filter(text)
         self.scene_grid.filter(text)
+        self.board_grid.filter(text)
 
     def _update_buttons(self):
         project = self.current_project()
         scenes = self.on_scenes_tab()
+        boards = self.on_boards()
         self.new_scene_btn.setVisible(scenes)
-        self.import_btn.setVisible(not scenes)
+        self.import_btn.setVisible(not scenes and not boards)
+        self.import_boards_btn.setVisible(boards)
         self.add_btn.setVisible(project is not None and not scenes)
-        self.open_btn.setEnabled(bool(self.scene_grid.selected_scenes() if scenes
-                                      else self.grid.selected_clips()))
+        selected = (self.board_grid.selected_boards() if boards
+                    else self.scene_grid.selected_scenes() if scenes
+                    else self.grid.selected_clips())
+        self.open_btn.setEnabled(bool(selected))
+        self.open_btn.setToolTip("Look at the board and draw on it (not saved)" if boards else "")
 
     # --- opening ------------------------------------------------------------
     def open_selected(self):
-        if self.on_scenes_tab():
+        if self.on_boards():
+            boards = self.board_grid.selected_boards()
+            if boards:
+                self.openBoard.emit(boards[0])
+        elif self.on_scenes_tab():
             scenes = self.scene_grid.selected_scenes()
             if scenes:
                 self.openScene.emit(self._entry, scenes[0].id)
@@ -499,7 +696,8 @@ class LibraryScreen(QWidget):
             self.newSceneRequested.emit(pid)
 
     def select_all(self):
-        grid = self.scene_grid if self.on_scenes_tab() else self.grid
+        grid = (self.board_grid if self.on_boards()
+                else self.scene_grid if self.on_scenes_tab() else self.grid)
         grid.setFocus()
         grid.selectAll()
 
@@ -573,6 +771,11 @@ class LibraryScreen(QWidget):
 
     # --- Edit menu ----------------------------------------------------------
     def rename_selected(self):
+        if self.on_boards():
+            boards = self.board_grid.selected_boards()
+            if boards:
+                self.rename_board(boards[0].id)
+            return
         if self.on_scenes_tab() and not self.sidebar.hasFocus():
             scenes = self.scene_grid.selected_scenes()
             if scenes:
@@ -584,7 +787,9 @@ class LibraryScreen(QWidget):
         # Edit > Delete: a project if the project list has focus; otherwise
         # the selected scenes, or the selected clips (removed from this
         # project, or deleted from the library when viewing All clips).
-        if self.sidebar.hasFocus() and self.current_project_id():
+        if self.on_boards():
+            self.delete_boards(self.board_grid.selected_boards())
+        elif self.sidebar.hasFocus() and self.current_project_id():
             self.delete_project()
         elif self.on_scenes_tab():
             self.delete_scenes([s.id for s in self.scene_grid.selected_scenes()])
@@ -592,6 +797,44 @@ class LibraryScreen(QWidget):
             self.remove_from_project(self.grid.selected_clips())
         else:
             self.delete_from_library(self.grid.selected_clips())
+
+    # --- boards -------------------------------------------------------------
+    def rename_board(self, bid: str):
+        board = self.boards.get(bid)
+        if not board:
+            return
+        name, ok = QInputDialog.getText(self, "Rename board", "Board name:",
+                                        QLineEdit.EchoMode.Normal, board.name)
+        if ok:
+            try:
+                self.boards.rename(bid, name)
+            except ValueError as e:
+                QMessageBox.warning(self, "Rename board", str(e))
+            self.refresh()
+
+    def delete_boards(self, boards: list[BoardInfo]):
+        if not boards:
+            return
+        used = sorted({f"{p.name} › {sc.name}" for b in boards
+                       for p, sc in self.projects.scenes_using_board(b.id)})
+        what = f"the board “{boards[0].name}”" if len(boards) == 1 else plural(len(boards), "board")
+        text = (f"Delete {what}?\n\nThe original picture files are not touched, "
+                "so you can import them again later.")
+        if used:
+            text += ("\n\nIt's also taken out of these scenes, with its drawings:\n"
+                     + "\n".join(used[:8]) + ("\n…" if len(used) > 8 else ""))
+        answer = QMessageBox.question(
+            self, "Delete board", text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        ids = [b.id for b in boards]
+        self.boardsDeleted.emit(ids)  # lets the player let go of them first
+        for bid in ids:
+            self.projects.forget_board(bid)
+            self.boards.remove(bid)
+        self.refresh()
 
     # --- scenes -------------------------------------------------------------
     def rename_scene(self, sid: str):
@@ -727,11 +970,37 @@ class LibraryScreen(QWidget):
         _menu_action(menu, "New scene", lambda: self.newSceneRequested.emit(pid))
         menu.exec(self.scene_grid.viewport().mapToGlobal(pos))
 
+    def _board_menu(self, pos):
+        item = self.board_grid.itemAt(pos)
+        if item and not item.isSelected():
+            self.board_grid.clearSelection()
+            item.setSelected(True)
+        boards = self.board_grid.selected_boards()
+        menu = QMenu(self)
+        if boards:
+            _menu_action(menu, "Quick view", lambda: self.openBoard.emit(boards[0]))
+            _menu_action(menu, "Rename…", lambda: self.rename_board(boards[0].id))
+            menu.addSeparator()
+            _menu_action(menu, "Delete board…" if len(boards) == 1 else "Delete boards…",
+                         lambda: self.delete_boards(boards))
+        else:
+            _menu_action(menu, "Import boards…", lambda: self.importBoardsRequested.emit())
+        menu.exec(self.board_grid.viewport().mapToGlobal(pos))
+
     def _sidebar_menu(self, pos):
         item = self.sidebar.itemAt(pos)
         pid = item.data(ROLE_ID) if item else None
         menu = QMenu(self)
-        if pid and pid != ALL_CLIPS:
+        if pid == BOARDS:
+            _menu_action(menu, "Import boards…", lambda: self.importBoardsRequested.emit())
+            menu.addSeparator()
+        elif pid and pid != ALL_CLIPS:
+            project = next((p for p in self._project_list if p.id == pid), None)
+            if project is not None and project.unloaded:
+                _menu_action(menu, "Load", lambda: self.loadProjectRequested.emit(pid))
+            else:
+                _menu_action(menu, "Unload", lambda: self.unloadProjectRequested.emit(pid))
+            menu.addSeparator()
             _menu_action(menu, "Rename…", lambda: self.rename_project(pid))
             _menu_action(menu, "Delete project…", lambda: self.delete_project(pid))
             menu.addSeparator()

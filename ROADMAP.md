@@ -1,27 +1,33 @@
 # Development Roadmap
 Features currently implemented
 
-## 1.0 Release
-1. [x] Video import
-2. [x] Frame-by-frame scrolling / buffer
-3. [x] Imported video library
-4. [x] Side-by-side video replay with adjustable sync
-6. [x] Drawing tools: arrow, circle, pen
-7. [x] Timing tools: count down to here, count up from here, count down+up
-8. [x] Video framing/crop (persistent zoom on frame)
-9. [x] Projects - collections of saved clips
+## 1.1 Release
+- [x] Blank / drawing frames for scenes
+- [x] Load / unload projects to save space without losing work - 20261109
+- [x] UI Tweaks:
+    - added undo/redo button
+    - fixed app icon not rendering correctly
 
 ## In Development
-1. [] Available as app package
-2. [] Windows / Mac compatability
-3. [] Blank / drawing frames for scenes
-4. [] Audio during realtime playback
-5. [] Improved touchscreen support
-6. [] Persistent video timestamps; mark points of interest in clip to look at, or skip to.
-7. [] Load / unload projects to save space without losing work
-8. [] Basic pre-import video trim tools (to help save space)
+- [] Mac compatability
+- [] Audio during realtime playback
+- [] Improved touchscreen support
+- [] Basic pre-import video trim tools (to help save space)
+- Tools:
+    - Persistent video timestamps
+    - Time Loop: play a segment over and over again
+    - multi-timer support, at least 1 timer per clip, rather than 1 timer per scene
+    - additional shapes (increased default set)
+    - tool setting tab while drawing (quickly adjust hold time, thickness, color of existing drawings)
+
+- UI tweaks:
+    - crop tool button re-location
+    - natural action button locations (particularly for import windows)
+    - tabbed shortcuts / tutorial page
 
 ## Moonshot goals
-1. [] object / edge detection for point tracking
-2. [] Intelligent object crop - zoom onto target moving in frame, keep target in centre of crop.
-3. [] iOS / Android Support
+- [] object / edge detection for point tracking
+- [] Intelligent object crop - zoom onto target moving in frame, keep target in centre of crop.
+- [] iOS / Android Support
+- [] Shape design tool (for making your own custom shapes)
+- [] key framing drawings on boards to make animations?

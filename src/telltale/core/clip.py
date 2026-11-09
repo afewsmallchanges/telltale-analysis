@@ -7,6 +7,10 @@
 #       frames/          000000.jpg, 000001.jpg, ... one file per frame
 #       audio.m4a        the clip's sound (only if the original had any)
 #       thumb.jpg        small preview picture for the library
+#
+# Unloading a project deletes frames/ (by far the biggest part) to save disk
+# space; the rest stays, so the clip still shows in the library and in scene
+# thumbnails. Loading makes frames/ again from the original video.
 
 from __future__ import annotations
 
@@ -73,6 +77,16 @@ class ClipInfo:
     @property
     def thumb_path(self) -> Path:
         return self.path / THUMB_FILE
+
+    @property
+    def frames_dir(self) -> Path:
+        return self.path / FRAMES_DIR
+
+    @property
+    def has_frames(self) -> bool:
+        # False once the frames were deleted (its project was unloaded). The
+        # last frame is checked: frames/ is only ever removed or added whole.
+        return self.frame_path(self.frame_count - 1).is_file()
 
     # --- saving / loading ---------------------------------------------------
     def save(self):

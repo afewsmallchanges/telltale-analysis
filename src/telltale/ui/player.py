@@ -10,7 +10,7 @@
 #
 # In split view every clip moves together (main timeline, jog wheel, arrow
 # keys, play); each clip's own coloured bar sets its sync point. The maths
-# is in core/sync.py.
+# is in core/sync.py. A board takes no part in the timeline, but can be zoomed and drawn on.
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import settings
+from ..core.boards import BoardInfo, load_image
 from ..core.clip import ClipInfo
 from ..core.frames import FrameSource
 from ..core.projects import DEFAULT_LAYOUTS, Scene, SceneSlot, valid_layout
@@ -57,6 +58,7 @@ class PlayerScreen(QWidget):
     drawingSelectionChanged = Signal()  # a drawing was selected / deselected
     addClipRequested = Signal(int) # a view's "+" was clicked
     saveRequested = Signal()       # the scene changed (sent after a short pause)
+    historyChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -91,10 +93,17 @@ class PlayerScreen(QWidget):
         self.tools.modeChanged.connect(lambda m: settings.set_ui_value("draw/mode", m))
         self.tools.colourChanged.connect(self._colour_changed)
         self.tools.styleChanged.connect(self._style_changed)
+        
+        self.tools.undoRequested.connect(self.undo_drawing)
+        self.tools.redoRequested.connect(self.redo_drawing)
         # Undo for drawings: each entry holds how the affected views' drawings
         # looked just before a change (add, move, delete, restyle, clear).
+        # Undoing moves an entry to _redo (holding how they looked before the
+        # undo); any new change clears _redo.
         self._undo: list[list[tuple[VideoPane, object]]] = []
+        self._redo: list[list[tuple[VideoPane, object]]] = []        
         self.scenes_panel = ScenesPanel()
+
 
         # --- video area -----------------------------------------------------
         self.video_area = QWidget()
@@ -112,7 +121,9 @@ class PlayerScreen(QWidget):
             pane.view.clearRequested.connect(lambda p=pane: self.clear_view_drawings(p))
             pane.view.contextRequested.connect(lambda pos, p=pane: self._view_menu(p, pos))
             pane.view.selectionChanged.connect(lambda p=pane: self._selection_changed(p))
-            pane.view.editStarted.connect(lambda p=pane: self._push_undo([p]))
+           # commented for undo/redo testing
+           # pane.view.editStarted.connect(lambda p=pane: self._push_undo([p]))
+            pane.view.editStarted.connect(lambda p=pane: self._push_undo([p], keep_redo=True))
             pane.view.editFinished.connect(lambda moved, p=pane: self._edit_finished(p, moved))
             pane.stepRequested.connect(self.step)
             pane.syncScrubbed.connect(lambda f, p=pane: self.scrub_view(self.panes.index(p), f))
@@ -259,8 +270,14 @@ class PlayerScreen(QWidget):
     def has_clip(self) -> bool:
         return bool(self.sync.loaded())
 
+    def has_content(self) -> bool:
+        return any(p.has_content for p in self.panes[:self.views_shown])
+
     def active_clip(self) -> Optional[ClipInfo]:
         return self.panes[self.active].clip
+
+    def active_item(self):
+        return self.panes[self.active].item
 
     # --- scenes -------------------------------------------------------------
     def clear(self):
@@ -272,6 +289,8 @@ class PlayerScreen(QWidget):
             pane.unload()
         self.sync.clear()
         self._undo.clear()
+        self._redo.clear()
+        self._history_changed()
         self.rows, self.cols, self.views_shown = 1, 1, 1
         self.active = 0
         self._jog_last = None
@@ -280,21 +299,26 @@ class PlayerScreen(QWidget):
         self.refresh()
         self.activeClipChanged.emit()
 
-    def load_scene(self, scene: Scene, clips: dict[str, ClipInfo]):
-        # Show a saved scene: its views, clips, sync, zoom and position.
-        # `clips`: the library's clips by id (missing ones show as empty views).
+    def load_scene(self, scene: Scene, clips: dict[str, ClipInfo],
+                   boards: Optional[dict[str, BoardInfo]] = None):
+        # Show a saved scene: its views, clips, boards, sync, zoom and position.
+        # `clips` / `boards`: the libraries by id (missing ones show as empty views).
         self.clear()
         self._loading = True
         self.rows, self.cols = scene.rows, scene.cols
         self.views_shown = scene.rows * scene.cols
         self.sync.time = Fraction(scene.time)
         for i, slot in enumerate(scene.slots[:MAX_VIEWS]):
+            if slot is not None and slot.is_board:
+                board = (boards or {}).get(slot.board_id)
+                if board is not None:
+                    self._show_board(i, board, crop=slot.crop, saved_drawings=slot.drawings)
+                continue
             info = clips.get(slot.clip_id) if slot else None
             if info is None:
                 continue
             self.sync.load(i, info.rate, info.frame_count, offset=Fraction(slot.offset))
-            self.panes[i].load(info, FrameSource(info, cache_mb=160), crop=slot.crop,
-                               saved_drawings=slot.drawings)
+            self.panes[i].load(info, FrameSource(info, cache_mb=160), crop=slot.crop, saved_drawings=slot.drawings)
         self.sync.seek(self.sync.time)  # keep it within the clips
         self.active = min(scene.active, self.views_shown - 1)
         saved_timer = timer_mod.parse(scene.timer)
@@ -312,13 +336,15 @@ class PlayerScreen(QWidget):
         for i in range(self.views_shown):
             pane = self.panes[i]
             off = self.sync.offset(i)
-            scene.slots.append(SceneSlot(pane.clip.id, str(off), pane.crop_list(),
-                                         list(pane.view.layer.hold))
-                               if pane.clip and off is not None else None)
+            if pane.board is not None:
+                scene.slots.append(SceneSlot(board_id=pane.board.id, crop=pane.crop_list(), drawings=list(pane.view.layer.hold)))
+            elif pane.clip and off is not None:
+                scene.slots.append(SceneSlot(clip_id=pane.clip.id, offset=str(off), crop=pane.crop_list(), drawings=list(pane.view.layer.hold)))
+            else:
+                scene.slots.append(None)
         scene.time = str(self.sync.time)
         scene.active = self.active
-        scene.timer = ({"mode": self.timer_mode, "zero": str(self.timer_zero)}
-                       if self.timer_mode else None)
+        scene.timer = ({"mode": self.timer_mode, "zero": str(self.timer_zero)} if self.timer_mode else None)
 
     def _changed(self):
         if self.saving and not self._loading:
@@ -331,7 +357,7 @@ class PlayerScreen(QWidget):
             self.saveRequested.emit()
 
     def open_slots(self) -> list[int]:
-        return [i for i in range(self.views_shown) if self.panes[i].clip is None]
+        return [i for i in range(self.views_shown) if not self.panes[i].has_content]
 
     # --- loading clips ------------------------------------------------------
     def load_clip(self, info: ClipInfo, index: Optional[int] = None):
@@ -351,6 +377,32 @@ class PlayerScreen(QWidget):
         self.refresh()
         self.activeClipChanged.emit()
 
+    def load_board(self, board: BoardInfo, index: Optional[int] = None):
+        # Show `board` in view `index` (default: the selected view).
+        i = self.active if index is None else index
+        if i >= self.views_shown:
+            return
+        if i != self.active:
+            self.set_active(i)
+        pane = self.panes[i]
+        if pane.board and pane.board.id == board.id:
+            return
+        self.pause()
+        self._forget_undo(pane)
+        self._show_board(i, board)
+        self.refresh()
+        self.activeClipChanged.emit()
+
+    def _show_board(self, i: int, board: BoardInfo, crop: Optional[list] = None, saved_drawings: Optional[list] = None):
+        if self.sync.tracks[i] is not None:
+            self.sync.unload(i)  # a board has no place on the timeline
+        try:
+            picture = load_image(board)
+        except OSError:
+            self.panes[i].unload()
+            return
+        self.panes[i].load_board(board, picture, crop=crop, saved_drawings=saved_drawings)
+
     def _add_clicked(self, i: int):
         self.set_active(i)
         self.addClipRequested.emit(i)
@@ -365,9 +417,17 @@ class PlayerScreen(QWidget):
 
     def unload_clips(self, ids: list[str]):
         # Clips deleted from the library: stop showing them.
+        self._unload_where(lambda pane: pane.clip is not None and pane.clip.id in ids)
+
+    def unload_boards(self, ids: list[str]):
+        # Boards deleted: stop showing them.
+        self._unload_where(lambda pane: pane.board is not None and pane.board.id in ids)
+
+    def _unload_where(self, test):
         changed = False
         for i, pane in enumerate(self.panes):
-            if pane.clip and pane.clip.id in ids:
+            if test(pane):
+                self._forget_undo(pane)
                 self._unload(i)
                 changed = True
         if changed:
@@ -394,7 +454,7 @@ class PlayerScreen(QWidget):
         old = self.views_shown
         n = rows * cols
         for i in range(n, MAX_VIEWS):
-            if self.panes[i].clip:
+            if self.panes[i].has_content:
                 self._unload(i)
         self.rows, self.cols, self.views_shown = rows, cols, n
         # Adding views: select the first new (empty) one, ready for a clip.
@@ -404,8 +464,8 @@ class PlayerScreen(QWidget):
         self.activeClipChanged.emit()
 
     def remove_clip(self, i: int):
-        # Empty view i (it shows "+" again). Its drawings go with the clip.
-        if self.panes[i].clip is None:
+        # Empty view i (it shows "+" again). Its drawings go with the clip or board.
+        if not self.panes[i].has_content:
             return
         self.pause()
         self._unload(i)
@@ -443,11 +503,12 @@ class PlayerScreen(QWidget):
         i = self.panes.index(pane)
         self.set_active(i)
         menu = QMenu(self)
-        if pane.clip:
-            menu.addAction("Replace clip…").triggered.connect(lambda _c=False: self._add_clicked(i))
-            menu.addAction("Remove clip").triggered.connect(lambda _c=False: self.remove_clip(i))
+        if pane.has_content:
+            what = "board" if pane.board is not None else "clip"
+            menu.addAction("Replace…").triggered.connect(lambda _c=False: self._add_clicked(i))
+            menu.addAction(f"Remove {what}").triggered.connect(lambda _c=False: self.remove_clip(i))
         else:
-            menu.addAction("Add clip…").triggered.connect(lambda _c=False: self._add_clicked(i))
+            menu.addAction("Add clip or board…").triggered.connect(lambda _c=False: self._add_clicked(i))
         if self.views_shown > 1:
             menu.addSeparator()
             menu.addAction("Close view").triggered.connect(lambda _c=False: self.close_view(i))
@@ -606,19 +667,49 @@ class PlayerScreen(QWidget):
         if not moved:
             if self._undo:
                 self._undo.pop()  # just a click: nothing to undo
+                self._history_changed()
             return
+        self._redo.clear()  # a real change
+        self._history_changed()
+            
+            # if self._undo:
+            #     self._undo.pop()  # just a click: nothing to undo
+            # return
         d = pane.view.layer.selected_drawing()
         if d is not None and pane.view.layer.is_saved(d.id):
             self._changed()
 
     # --- undo ---------------------------------------------------------------
-    def _push_undo(self, panes: list[VideoPane]):
+    # def _push_undo(self, panes: list[VideoPane]):
+    #     self._undo.append([(p, p.view.layer.snapshot()) for p in panes])
+    #     del self._undo[:-50]  # keep the last 50 steps
+
+    # def _forget_undo(self, pane: VideoPane):
+    #     # The view's clip changed: its old drawings can't come back.
+    #     self._undo = [e for e in self._undo if all(p is not pane for p, _snap in e)]
+
+    def _push_undo(self, panes: list[VideoPane], keep_redo: bool = False):
         self._undo.append([(p, p.view.layer.snapshot()) for p in panes])
         del self._undo[:-50]  # keep the last 50 steps
+        if not keep_redo:
+            self._redo.clear()  # a new change: what was undone can't be redone
+        self._history_changed()
 
     def _forget_undo(self, pane: VideoPane):
         # The view's clip changed: its old drawings can't come back.
         self._undo = [e for e in self._undo if all(p is not pane for p, _snap in e)]
+        self._redo = [e for e in self._redo if all(p is not pane for p, _snap in e)]
+        self._history_changed()
+
+    def can_undo(self) -> bool:
+        return bool(self._undo)
+
+    def can_redo(self) -> bool:
+        return bool(self._redo)
+
+    def _history_changed(self):
+        self.tools.set_history(self.can_undo(), self.can_redo())
+        self.historyChanged.emit()
 
     # --- timer --------------------------------------------------------------
     def _build_timer_menu(self):
@@ -739,13 +830,36 @@ class PlayerScreen(QWidget):
             pane.view.layer.clear_all()
         self._changed()
 
+    # commented out while testing undo/redo buttons.
+    # def undo_drawing(self) -> bool:
+    #     # Put the drawings back how they were before the last change.
+    #     if not self._undo:
+    #         return False
+    #     for pane, snap in self._undo.pop():
+    #         pane.view.layer.restore(snap)
+    #     self._changed()
+    #     self.drawingSelectionChanged.emit()
+    #     return True
+
     def undo_drawing(self) -> bool:
         # Put the drawings back how they were before the last change.
-        if not self._undo:
+        return self._step_history(self._undo, self._redo)
+
+    def redo_drawing(self) -> bool:
+        # Put back a change that was undone.
+        return self._step_history(self._redo, self._undo)
+
+    def _step_history(self, source: list, target: list) -> bool:
+        # Take the last entry from `source` (undo or redo), first saving how
+        # those views look now on `target`, so the step can be reversed.
+        if not source:
             return False
-        for pane, snap in self._undo.pop():
+        entry = source.pop()
+        target.append([(pane, pane.view.layer.snapshot()) for pane, _snap in entry])
+        for pane, snap in entry:
             pane.view.layer.restore(snap)
         self._changed()
+        self._history_changed()
         self.drawingSelectionChanged.emit()
         return True
 
@@ -765,7 +879,7 @@ class PlayerScreen(QWidget):
     def _update_overlay(self):
         pane = self.panes[self.active]
         view = pane.view
-        self.crop_btn.setEnabled(pane.clip is not None)
+        self.crop_btn.setEnabled(pane.has_content)
         self.crop_btn.setChecked(view.crop_mode or view.crop is not None)
         if view.crop is not None:
             self.crop_btn.setToolTip("Zoomed in — click to show the whole picture")
