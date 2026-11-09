@@ -1,5 +1,8 @@
 # library.py
 # The clip library: every imported clip lives in its own folder under paths.library_dir(), named by its clip id (see clip.py for the layout).
+#
+# A clip's frames can be deleted to save space (unload_clip) and made again
+# from the original video later (reload_clip); see core/storage.py for when.
 
 
 # A clip's id comes from the contents of the original file, not its name or location, so a renamed or moved file is recognised instead of being imported a second time.
@@ -14,12 +17,17 @@ from pathlib import Path
 from typing import Optional
 
 from . import ffmpeg, ingest, paths, timebase
-from .clip import ClipInfo
+from .clip import AUDIO_FILE, FRAMES_DIR, THUMB_FILE, ClipInfo
 from .ingest import ImportCancelled, ImportFailed, ProgressCallback
 
-__all__ = ["Library", "clip_id", "ImportCancelled", "ImportFailed"]
+__all__ = ["Library", "clip_id", "ImportCancelled", "ImportFailed", "WrongFile"]
 
 _SAMPLE = 1024 * 1024  # bytes read from each end of the file for the id
+
+
+class WrongFile(ImportFailed):
+    # The file given to reload a clip isn't the video it was imported from.
+    pass
 
 
 def clip_id(src: Path) -> str:
@@ -81,6 +89,80 @@ class Library:
     def remove(self, cid: str):
         shutil.rmtree(self.root / cid, ignore_errors=True)
 
+    # --- unloading / loading frames -------------------------------------------
+    def frames_bytes(self, info: ClipInfo) -> int:
+        # Space the clip's frames take up (what unloading it would free).
+        if not info.has_frames:
+            return 0
+        others = sum(f.stat().st_size for f in info.path.iterdir() if f.is_file())
+        return max(0, self.size_on_disk(info.id) - others)
+
+    def unload_clip(self, cid: str) -> int:
+        # Delete a clip's frames, keeping its record, thumbnail and sound.
+        # Returns the bytes freed.
+        info = self.get(cid)
+        if info is None:
+            return 0
+        before = self.size_on_disk(cid)
+        trash = info.path / (FRAMES_DIR + ".trash")
+        shutil.rmtree(trash, ignore_errors=True)
+        if info.frames_dir.exists():
+            info.frames_dir.rename(trash)  # all at once, so frames/ is never half there
+        shutil.rmtree(trash, ignore_errors=True)
+        info.disk_bytes = _folder_bytes(info.path)
+        info.save()
+        return max(0, before - info.disk_bytes)
+
+    def reload_clip(
+        self,
+        cid: str,
+        src: Optional[Path | str] = None,
+        progress: Optional[ProgressCallback] = None,
+        cancel: Optional[threading.Event] = None,
+    ) -> ClipInfo:
+        # Make an unloaded clip's frames again from its original video
+        # (`src`, or where it was last seen). Frame numbers stay the same, so
+        # sync, zoom and drawings in scenes still line up.
+        info = self.get(cid)
+        if info is None:
+            raise ImportFailed("That clip is no longer in the library.")
+        src = Path(src or info.source).resolve()
+        if not src.is_file():
+            raise ImportFailed(f"The original video for {info.name} can't be found:\n{src}")
+        if clip_id(src) != cid:
+            raise WrongFile(f"{src.name} isn't the video {info.name} was imported from.")
+        if info.has_frames:
+            if progress:
+                progress(1.0)
+            return info
+
+        work = self.root / f"{cid}.reload.part"
+        shutil.rmtree(work, ignore_errors=True)
+        audio = info.has_audio and not (info.path / AUDIO_FILE).is_file()
+        try:
+            work.mkdir(parents=True)
+            count, w, h = ingest.extract(src, work, info.rate, audio, info.duration,
+                                         progress, cancel)
+            if (w, h) != (info.width, info.height):
+                raise ImportFailed(
+                    f"{src.name} now gives {w}×{h} pictures instead of "
+                    f"{info.width}×{info.height}, so drawings wouldn't line up.")
+            shutil.rmtree(info.frames_dir, ignore_errors=True)  # any partial leftovers
+            (work / FRAMES_DIR).rename(info.frames_dir)
+            for name in ([AUDIO_FILE] if audio else []) + [THUMB_FILE]:
+                if (work / name).is_file() and not (info.path / name).is_file():
+                    (work / name).rename(info.path / name)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+        info.frame_count = count  # normally unchanged
+        info.source = str(src)
+        info.disk_bytes = _folder_bytes(info.path)
+        info.save()
+        if progress:
+            progress(1.0)
+        return info
+
     # --- importing ----------------------------------------------------------
     def import_clip(
         self,
@@ -96,6 +178,8 @@ class Library:
 
         existing = self.find(src)
         if existing:
+            if not existing.has_frames:  # imported before, then unloaded
+                return self.reload_clip(existing.id, src, progress, cancel)
             if progress:
                 progress(1.0)
             return existing

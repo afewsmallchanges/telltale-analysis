@@ -17,6 +17,8 @@ SHORTCUTS = [
         ("Rename project or scene", "F2"),
         ("Delete scene / remove clip", "Delete"),
         ("Select all", "Ctrl+A"),
+        ("Unload a project (free disk space)", "Right-click it → Unload"),
+        ("Load it again", "Right-click → Load, or open one of its scenes"),
     ]),
     ("Player", [
         ("Step 1 frame", "Scroll, jog wheel, ← / →, , / ."),

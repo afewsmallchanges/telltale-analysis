@@ -1,7 +1,8 @@
 # main_window.py
 # The main window: the start screen (library) and the player, the menus
-# (File | Edit | View | Help), importing clips, keyboard shortcuts, and
-# which scene (or quick view) the player is showing.
+# (File | Edit | View | Help), importing clips, keyboard shortcuts, which
+# scene (or quick view) the player is showing, and unloading / loading
+# projects (deleting and re-making their frames, core/storage.py).
 
 from __future__ import annotations
 
@@ -20,15 +21,15 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
-from ..core import paths, timebase
+from ..core import paths, storage, timebase
 from ..core.boards import IMAGE_EXTENSIONS, BoardInfo, BoardLibrary, ImportFailed
 from ..core.clip import ClipInfo
-from ..core.library import Library
+from ..core.library import Library, clip_id
 from ..core.projects import MAX_CLIPS_PER_SCENE, ProjectStore
 from . import help_dialogs
-from .import_worker import ImportWorker
+from .import_worker import ImportWorker, LoadWorker
 from .dialogs import ClipPickerDialog, ask_choice, ask_name
-from .library_screen import LibraryScreen, plural, scene_icon, scene_items
+from .library_screen import LibraryScreen, format_bytes, plural, scene_icon, scene_items
 from .picture_reader import read_picture
 from .player import PlayerScreen
 from .settings_dialog import SettingsDialog
@@ -67,6 +68,8 @@ class MainWindow(QMainWindow):
         h.openBoard.connect(self.quick_view)
         h.boardsDeleted.connect(self._boards_deleted)
         h.entryChanged.connect(self._update_state)
+        h.loadProjectRequested.connect(lambda pid: self.load_project(pid))
+        h.unloadProjectRequested.connect(self.unload_project)
 
         self.player = PlayerScreen()
         self.player.activeClipChanged.connect(self._active_clip_changed)
@@ -92,6 +95,10 @@ class MainWindow(QMainWindow):
         self._play_after = False
         self._imported: list[ClipInfo] = []
         self._import_errors: list[tuple[str, str]] = []
+        # Loading state (re-making unloaded clips' frames)
+        self._after_load: Optional[Callable[[], object]] = None
+        self._load_errors: list[tuple[str, str]] = []
+        self._load_cancelled = False
 
         self._build_menus()
         self._build_player_shortcuts()
@@ -238,14 +245,25 @@ class MainWindow(QMainWindow):
     # --- scenes -------------------------------------------------------------
     def open_scene(self, pid: str, sid: str):
         self.player.flush_save()
-        scene = self.projects.get_scene(pid, sid)
+        project = self.projects.get(pid)
+        scene = project.scene(sid) if project else None
         if scene is None:
             self.statusBar().showMessage("That scene no longer exists.")
             if (pid, sid) == (self.scene_pid, self.scene_id):
                 self._close_scene()
             return
-        self.scene_pid, self.scene_id, self.quick = pid, sid, False
         clips = {c.id: c for c in self.library.clips()}
+        # Its clips' frames must be there first: load the project if it's
+        # unloaded, or any clip that isn't loaded (opened again afterwards).
+        if project.unloaded:
+            self.load_project(pid, then=lambda: self.open_scene(pid, sid),
+                              asking=f"open “{scene.name}”")
+            return
+        needed = [clips[cid] for cid in scene.clip_ids() if cid in clips and not clips[cid].has_frames]
+        if needed:
+            self.ensure_frames(needed, lambda: self.open_scene(pid, sid))
+            return
+        self.scene_pid, self.scene_id, self.quick = pid, sid, False
         boards = {b.id: b for b in self.boards.boards()}
         self.player.load_scene(scene, clips, boards)
         self._refresh_scenes_panel()
@@ -377,6 +395,17 @@ class MainWindow(QMainWindow):
 
     def quick_view(self, info: ClipInfo | BoardInfo):
         # Look at a clip or board without a project. Nothing is saved.
+        if isinstance(info, ClipInfo) and not info.has_frames:
+            answer = QMessageBox.question(
+                self, "Clip not loaded",
+                f"“{info.name}” isn't loaded: its frames were deleted when its project was "
+                "unloaded.\n\nRe-import it from the original video?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes)
+            if answer == QMessageBox.StandardButton.Yes:
+                self.ensure_frames([info], lambda: self.quick_view(self.library.get(info.id) or info),
+                                   "Loading clip")
+            return
         self.player.flush_save()
         self.scene_pid = self.scene_id = None
         self.quick = True
@@ -425,9 +454,15 @@ class MainWindow(QMainWindow):
         if isinstance(chosen, BoardInfo):
             self.player.load_board(chosen, i)  # boards aren't added to the project's clips
             return
-        if project:
-            self.projects.add_clips(project.id, [chosen.id])
-        self.player.load_clip(chosen, i)
+
+        def place():
+            info = self.library.get(chosen.id)
+            if info is None:
+                return
+            if project:
+                self.projects.add_clips(project.id, [info.id])
+            self.player.load_clip(info, i)
+        self.ensure_frames([chosen], place, "Loading clip")  # if it was unloaded
 
     def _active_clip_changed(self):
         self._update_state()
@@ -453,6 +488,184 @@ class MainWindow(QMainWindow):
         self.player.unload_boards(ids)
         self.player.save_timer.stop()  # already removed from the scenes on disk
         self._update_state()
+
+    # --- unloading / loading projects --------------------------------------
+    def unload_project(self, pid: str):
+        # Delete the frames of the project's clips to free disk space, after
+        # saying how much it frees. Everything else is kept.
+        project = self.projects.get(pid)
+        if project is None:
+            return
+        if self._worker is not None:
+            self.statusBar().showMessage("Busy importing — try again when it has finished.")
+            return
+        self.player.flush_save()
+        plan = storage.plan_unload(self.projects, self.library, pid)
+        if plan.free:
+            text = (f"Unload “{project.name}”?\n\n"
+                    f"This deletes the imported frames of {plural(len(plan.free), 'clip')}, "
+                    f"freeing {format_bytes(plan.bytes)}. The project, its scenes, sync, zoom, "
+                    "drawings and thumbnails are all kept, and Load re-imports the frames from "
+                    "the original videos.")
+            if plan.kept:
+                n = len(plan.kept)
+                text += (f"\n\n{plural(n, 'clip')} {'is' if n == 1 else 'are'} also used by "
+                         f"other loaded projects, so {'its' if n == 1 else 'their'} frames are kept.")
+        else:
+            text = (f"Unload “{project.name}”?\n\nNo space is freed yet: its clips are also "
+                    "used by other loaded projects, so their frames are kept until those "
+                    "projects are unloaded too.")
+        if plan.no_original:
+            names = ", ".join(c.name for c in plan.no_original[:5])
+            more = "…" if len(plan.no_original) > 5 else ""
+            text += (f"\n\nThe original video can't be found for: {names}{more}. "
+                     "To load the project again you'll need to find "
+                     f"{'it' if len(plan.no_original) == 1 else 'them'}.")
+        answer = QMessageBox.question(
+            self, "Unload project", text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        # The player lets go of this project's scene, or any clip about to go.
+        freeing = {c.id for c in plan.free}
+        if self.scene_pid == pid or any(p.clip and p.clip.id in freeing for p in self.player.panes):
+            self._close_scene()
+        freed = storage.unload(self.projects, self.library, plan)
+        self.home.refresh()
+        self._update_state()
+        self.statusBar().showMessage(f"Unloaded “{project.name}”: freed {format_bytes(freed)}.", 8000)
+
+    def load_project(self, pid: str, then: Optional[Callable[[], object]] = None,
+                     asking: Optional[str] = None):
+        # Re-import an unloaded project's frames, then call `then`. With
+        # `asking` (e.g. "open “Start”"), first asks whether to.
+        project = self.projects.get(pid)
+        if project is None:
+            return
+        todo = storage.clips_to_load(self.projects, self.library, pid)
+        if asking and todo:
+            answer = QMessageBox.question(
+                self, "Load project",
+                f"“{project.name}” is unloaded. Load it to {asking}?\n\n"
+                f"This re-imports {plural(len(todo), 'clip')} from the original videos, "
+                "which takes about as long as importing them did.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        def loaded():
+            self.projects.set_unloaded(pid, False)
+            if self.stack.currentWidget() is self.home:
+                self.home.refresh()
+            self.statusBar().showMessage(f"Loaded “{project.name}”.", 5000)
+            if then is not None:
+                then()
+        self.ensure_frames(todo, loaded, f"Loading “{project.name}”")
+
+    def ensure_frames(self, clips: list[ClipInfo], then: Callable[[], object],
+                      title: str = "Loading clips"):
+        # Make sure these clips' frames exist, re-importing any that were
+        # unloaded (in the background, with a progress dialog), then call
+        # `then`. Nothing happens if it's cancelled or a clip can't be loaded.
+        missing = [c for c in clips if c is not None and not c.has_frames]
+        if not missing:
+            then()
+            return
+        if self._worker is not None:
+            self.statusBar().showMessage("Busy importing — try again when it has finished.")
+            return
+        jobs = []
+        for c in missing:
+            src = self._find_original(c)
+            if src is None:
+                self.statusBar().showMessage(
+                    f"Not loaded: the original video for “{c.name}” is needed.", 8000)
+                return
+            jobs.append((c, src))
+
+        self.player.pause()
+        self._after_load = then
+        self._load_errors = []
+        self._load_cancelled = False
+        self._progress = QProgressDialog("Preparing…", "Cancel", 0, 1000, self)
+        self._progress.setWindowTitle(title)
+        self._progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress.setMinimumDuration(400)
+        self._progress.setAutoClose(False)
+        self._progress.setAutoReset(False)
+        self._progress.setValue(0)
+
+        worker = LoadWorker(self.library, jobs, self)
+        worker.progress.connect(self._load_progress)
+        worker.clipFailed.connect(lambda name, msg: self._load_errors.append((name, msg)))
+        worker.cancelled.connect(lambda: setattr(self, "_load_cancelled", True))
+        worker.finished.connect(self._load_finished)
+        self._progress.canceled.connect(worker.cancel_event.set)
+        self._worker = worker
+        worker.start()
+
+    def _find_original(self, clip: ClipInfo) -> Optional[Path]:
+        # The clip's original video: where it was last seen, or (if it's gone)
+        # wherever the user finds it. The file's contents must match the clip.
+        def same(path: Path) -> bool:
+            try:
+                return path.is_file() and clip_id(path) == clip.id
+            except OSError:
+                return False
+
+        path = Path(clip.source)
+        if same(path):
+            return path
+        folder = path.parent if path.parent.is_dir() else Path.home()
+        text = (f"The original video for “{clip.name}” isn't where it was imported from:\n"
+                f"{clip.source}\n\nIt's needed to re-import the clip's frames. Find it?")
+        while True:
+            answer = QMessageBox.question(
+                self, "Find the original video", text,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes)
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+            file, _ = QFileDialog.getOpenFileName(self, f"Find “{clip.name}”", str(folder),
+                                                  VIDEO_FILTER)
+            if not file:
+                return None
+            if same(Path(file)):
+                return Path(file)
+            folder = Path(file).parent
+            text = (f"{Path(file).name} isn't the same video as “{clip.name}” (its contents "
+                    "are different).\n\nFind the original?")
+
+    def _load_progress(self, fraction: float, label: str):
+        if self._progress:
+            self._progress.setLabelText(f"Re-importing {label}…")
+            self._progress.setValue(int(fraction * 1000))
+
+    def _load_finished(self):
+        if self._progress:
+            self._progress.reset()
+            self._progress.deleteLater()
+            self._progress = None
+        if self._worker:
+            self._worker.deleteLater()
+            self._worker = None
+        then, self._after_load = self._after_load, None
+        if self.stack.currentWidget() is self.home:
+            self.home.refresh()
+        if self._load_errors:
+            shown = self._load_errors[:5]
+            text = "\n\n".join(f"{name}:\n{msg}" for name, msg in shown)
+            if len(self._load_errors) > len(shown):
+                text += f"\n\n…and {len(self._load_errors) - len(shown)} more."
+            QMessageBox.warning(self, "Could not load", text)
+            return
+        if self._load_cancelled:
+            self.statusBar().showMessage("Loading cancelled.", 5000)
+            return
+        if then is not None:
+            then()
 
     # --- importing ----------------------------------------------------------
     def new_project(self):

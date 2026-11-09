@@ -6,6 +6,10 @@
 # Clips live once in the shared library; projects only list clip ids, so a
 # clip can be in several projects. Removing a clip from a project keeps it in
 # the library; deleting it from the library removes it everywhere.
+#
+# Each project shows whether it's loaded or unloaded (its clips' frames
+# deleted to save space, core/storage.py). Unloading and loading are done by
+# the main window, as loading needs a background job.
 
 from __future__ import annotations
 
@@ -40,6 +44,7 @@ from ..core.boards import BoardInfo, BoardLibrary
 from ..core.clip import ClipInfo
 from ..core.library import Library
 from ..core.projects import DEFAULT_LAYOUTS, MAX_CLIPS_PER_SCENE, Project, ProjectStore, Scene
+from .icons import icon
 
 ALL_CLIPS = "__all__"           # sidebar entry id for "All clips"
 BOARDS = "__boards__"           # sidebar entry id for "Boards"
@@ -165,13 +170,17 @@ class ClipGrid(QListWidget):
         for c in clips:
             details = (f"{format_duration(c.duration)} · {c.width}×{c.height} · "
                        f"{timebase.format_rate(c.rate)} fps")
-            item = QListWidgetItem(thumb_icon(c), f"{c.name}\n{details}")
+            loaded = c.has_frames
+            shown = details if loaded else f"{format_duration(c.duration)} · not loaded"
+            item = QListWidgetItem(thumb_icon(c), f"{c.name}\n{shown}")
             item.setData(ROLE_ID, c.id)
             item.setToolTip(
                 f"<b>{c.name}</b><br>{details}<br>{plural(c.frame_count, 'frame')}"
                 f"{'' if c.has_audio else ' · no audio'}<br>"
                 f"Imported {c.imported_at[:16].replace('T', ' ')}<br>"
                 f"Original: {c.source}"
+                + ("" if loaded else "<br><i>Not loaded: its frames were deleted when its "
+                   "project was unloaded. Opening it re-imports them from the original.</i>")
             )
             self.addItem(item)
             if c.id in keep:
@@ -314,6 +323,8 @@ class LibraryScreen(QWidget):
     clipsDeleted = Signal(list)              # clip ids about to be deleted
     boardsDeleted = Signal(list)             # board ids about to be deleted
     entryChanged = Signal()                  # a different project / All clips / Boards / tab
+    loadProjectRequested = Signal(str)       # project id
+    unloadProjectRequested = Signal(str)     # project id
 
     def __init__(self, library: Library, projects: ProjectStore, boards: BoardLibrary,
                  parent=None):
@@ -328,6 +339,7 @@ class LibraryScreen(QWidget):
 
         # Left: All clips + projects
         self.sidebar = QListWidget()
+        self.sidebar.setIconSize(QSize(18, 18))
         self.sidebar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.sidebar.customContextMenuRequested.connect(self._sidebar_menu)
         self.sidebar.currentItemChanged.connect(self._sidebar_changed)
@@ -425,6 +437,27 @@ class LibraryScreen(QWidget):
         self.body.addWidget(self.tabs)
         self.body.addWidget(self.board_pages)
 
+        # Shown above the tabs for an unloaded project.
+        self.unloaded_bar = QWidget()
+        self.unloaded_bar.setObjectName("unloadedBar")
+        self.unloaded_bar.setStyleSheet(
+            "#unloadedBar { background: #2a2a30; border: 1px solid #44444c; border-radius: 6px; }")
+        self.unloaded_icon = QLabel()
+        self.unloaded_icon.setPixmap(icon("project_unloaded").pixmap(QSize(22, 22)))
+        self.unloaded_text = QLabel()
+        self.unloaded_text.setWordWrap(True)
+        self.load_btn = QPushButton("Load")
+        self.load_btn.setToolTip("Re-import this project's frames from the original videos")
+        self.load_btn.clicked.connect(
+            lambda: self.current_project_id() and self.loadProjectRequested.emit(
+                self.current_project_id()))
+        bar_layout = QHBoxLayout(self.unloaded_bar)
+        bar_layout.setContentsMargins(10, 6, 10, 6)
+        bar_layout.addWidget(self.unloaded_icon)
+        bar_layout.addWidget(self.unloaded_text, 1)
+        bar_layout.addWidget(self.load_btn)
+        self.unloaded_bar.hide()
+
         self.footer = QLabel()
         self.footer.setStyleSheet("color: gray;")
 
@@ -432,6 +465,7 @@ class LibraryScreen(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 8, 8, 8)
         right_layout.addLayout(top)
+        right_layout.addWidget(self.unloaded_bar)
         right_layout.addWidget(self.body, 1)
         right_layout.addWidget(self.footer)
 
@@ -525,10 +559,16 @@ class LibraryScreen(QWidget):
         current = boards_item if self._entry == BOARDS else all_item
         for p in self._project_list:
             n_clips = sum(1 for cid in p.clip_ids if cid in existing)
-            item = QListWidgetItem(f"{p.name}  ·  {len(p.scenes)}")
+            state = ("Unloaded: its frames were deleted to save space.\n"
+                     "Right-click → Load to re-import them." if p.unloaded else
+                     "Loaded. Right-click → Unload to free disk space.")
+            item = QListWidgetItem(icon("project_unloaded" if p.unloaded else "project_loaded"),
+                                   f"{p.name}  ·  {len(p.scenes)}")
             item.setData(ROLE_ID, p.id)
             item.setToolTip(f"{p.name}\n{plural(len(p.scenes), 'scene')}, "
-                            f"{plural(n_clips, 'clip')}\nRight-click to rename or delete")
+                            f"{plural(n_clips, 'clip')}\n{state}")
+            if p.unloaded:
+                item.setForeground(QColor(150, 150, 158))
             sb.addItem(item)
             if p.id == self._entry:
                 current = item
@@ -580,7 +620,8 @@ class LibraryScreen(QWidget):
                 "or Add from library… to use clips you've already imported.")
             self.footer.setText(
                 f"{plural(len(project.scenes), 'scene')} · {plural(len(clips), 'clip')} · "
-                f"{format_bytes(self.library.total_size(clips))}")
+                f"{format_bytes(self.library.total_size(clips))}"
+                + (" · unloaded" if project.unloaded else ""))
         else:
             clips = list(reversed(self._all))  # newest first
             self.scene_grid.set_scenes([], by_id)
@@ -592,6 +633,16 @@ class LibraryScreen(QWidget):
                 self.tabs.blockSignals(True)
                 self.tabs.setCurrentIndex(CLIPS_TAB)
                 self.tabs.blockSignals(False)
+        unloaded = project is not None and project.unloaded
+        if unloaded:
+            missing = sum(1 for c in clips if not c.has_frames)
+            self.unloaded_text.setText(
+                "<b>This project is unloaded.</b> Its clips' frames were deleted to save disk "
+                "space; scenes, sync and drawings are kept. "
+                + (f"Load it to re-import {plural(missing, 'clip')} from the original videos "
+                   "before opening its scenes." if missing else
+                   "Its clips are all still loaded for other projects, so loading is instant."))
+        self.unloaded_bar.setVisible(unloaded)
         self.tabs.setTabVisible(SCENES_TAB, project is not None)
         self.tabs.tabBar().setVisible(project is not None)
         self.title.setText(self.entry_title())
@@ -944,6 +995,12 @@ class LibraryScreen(QWidget):
             _menu_action(menu, "Import boards…", lambda: self.importBoardsRequested.emit())
             menu.addSeparator()
         elif pid and pid != ALL_CLIPS:
+            project = next((p for p in self._project_list if p.id == pid), None)
+            if project is not None and project.unloaded:
+                _menu_action(menu, "Load", lambda: self.loadProjectRequested.emit(pid))
+            else:
+                _menu_action(menu, "Unload", lambda: self.unloadProjectRequested.emit(pid))
+            menu.addSeparator()
             _menu_action(menu, "Rename…", lambda: self.rename_project(pid))
             _menu_action(menu, "Delete project…", lambda: self.delete_project(pid))
             menu.addSeparator()

@@ -11,6 +11,9 @@
 # without copying any footage, and deleting a project never deletes clips.
 # Each project has its own folder so later per-project data (drawings,
 # markers, timers) can sit beside project.json.
+#
+# An "unloaded" project keeps its scenes, but its clips' frames have been
+# deleted to save disk space (see core/storage.py).
 
 from __future__ import annotations
 
@@ -44,12 +47,13 @@ def _now() -> str:
 
 @dataclass
 class SceneSlot:
-    # Parameters for a scene window
+    # One view in a scene: a clip, or a board (then clip_id is "").
+    # Keep board_id last: code elsewhere passes the first fields by position.
     clip_id: str = ""
-    board_id: str = ""                   
     offset: str = "0"                    # sync: seconds added to the scene clock (exact fraction)
     crop: Optional[list[float]] = None   # zoomed area [x, y, width, height] in video pixels
     drawings: list[Drawing] = field(default_factory=list)  # "Hold" drawings on this view
+    board_id: str = ""                   # set instead of clip_id for a board
 
     @property
     def is_board(self) -> bool:
@@ -58,6 +62,7 @@ class SceneSlot:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SceneSlot":
         known = {f.name for f in fields(cls)}
+        d = _repair_shifted_slot(d)
         slot = cls(**{k: v for k, v in d.items() if k in known})
         loaded = (Drawing.from_dict(x) for x in slot.drawings if isinstance(x, dict))
         slot.drawings = [x for x in loaded if x is not None]
@@ -110,6 +115,7 @@ class Project:
     scenes: list[Scene] = field(default_factory=list)   # in the order created
     created_at: str = ""
     modified_at: str = ""
+    unloaded: bool = False                              # frames deleted to save space
     version: int = FORMAT_VERSION
     # Not saved: where this project's folder is right now.
     folder: str = field(default="", compare=False)
@@ -120,6 +126,12 @@ class Project:
 
     def scene(self, sid: str) -> Optional[Scene]:
         return next((s for s in self.scenes if s.id == sid), None)
+
+    def all_clip_ids(self) -> list[str]:
+        # The project's clips plus any in its scenes (normally the same).
+        ids = list(self.clip_ids)
+        ids += [cid for s in self.scenes for cid in s.clip_ids() if cid not in ids]
+        return list(dict.fromkeys(ids))
 
     def save(self):
         self.path.mkdir(parents=True, exist_ok=True)
@@ -201,6 +213,13 @@ class ProjectStore:
     def delete(self, pid: str):
         # Removes the project only; its clips stay in the library.
         shutil.rmtree(self.root / pid, ignore_errors=True)
+
+    def set_unloaded(self, pid: str, unloaded: bool) -> Project:
+        return self._change(pid, lambda p: setattr(p, "unloaded", bool(unloaded)))
+
+    def loaded_clip_ids(self, except_pid: Optional[str] = None) -> set[str]:
+        return {cid for p in self.all() if not p.unloaded and p.id != except_pid
+                for cid in p.all_clip_ids()}
 
     # --- the project's clips ------------------------------------------------
     def add_clips(self, pid: str, clip_ids: Iterable[str]) -> Project:
@@ -299,6 +318,19 @@ class ProjectStore:
         p.modified_at = _now()
         p.save()
         return p
+
+# further testing on how to prevent this required.
+def _repair_shifted_slot(d: dict[str, Any]) -> dict[str, Any]:
+    # A build where board_id came second in SceneSlot saved clip views with
+    # every field moved along one: the sync offset in board_id, the zoom in
+    # offset and the drawings in crop. A real slot never has both a clip and
+    # a board, so that's how they're recognised and put back.
+    if d.get("clip_id") and d.get("board_id") and not isinstance(d.get("offset"), str):
+        crop = d.get("crop")
+        return {"clip_id": d["clip_id"], "offset": str(d["board_id"]), "crop": d.get("offset"),
+                "drawings": crop if isinstance(crop, list) and all(
+                    isinstance(x, dict) for x in crop) else []}
+    return d
 
 
 def _unique(base: str, taken: set[str], start_with_number: bool = False) -> str:

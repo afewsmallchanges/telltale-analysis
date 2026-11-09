@@ -328,7 +328,7 @@ class PlayerScreen(QWidget):
             if pane.board is not None:
                 scene.slots.append(SceneSlot(board_id=pane.board.id, crop=pane.crop_list(), drawings=list(pane.view.layer.hold)))
             elif pane.clip and off is not None:
-                scene.slots.append(SceneSlot(pane.clip.id, str(off), pane.crop_list(), list(pane.view.layer.hold)))
+                scene.slots.append(SceneSlot(clip_id=pane.clip.id, offset=str(off), crop=pane.crop_list(), drawings=list(pane.view.layer.hold)))
             else:
                 scene.slots.append(None)
         scene.time = str(self.sync.time)
