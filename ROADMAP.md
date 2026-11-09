@@ -1,17 +1,25 @@
-# Dev Branch Roadmap
-Things currently in development (in no particular order)
+# Development Roadmap
+Features currently implemented
 
-[x] Blank / drawing frames for scenes - implemented as 'boards' - 20261109
-[x] Load / unload projects to save space without losing work - 20261109
-[] Audio during realtime playback
-[] Improved touchscreen support
-[] Multiple Timers (one per clip rather than one per scene)
-[] Persistent video timestamps; mark points of interest in clip to look at, skip to or measure time with
-[] Basic pre-import video trim tools (to help save space)
-[] Mac Support
-[] Crop tool should move to corner of selected clip in scene, rather than fixed corner - annoying for changing crop of videos not in the top right for any split scene
+## 1.1 Release
+- [x] Blank / drawing frames for scenes
+- [x] Load / unload projects to save space without losing work - 20261109
+- [x] UI Tweaks:
+    - added undo/redo button
+    - fixed app icon not rendering correctly
+
+## In Development
+- [] Mac compatability
+- [] Audio during realtime playback
+- [] Improved touchscreen support
+- [] Persistent video timestamps; mark points of interest in clip to look at, or skip to.
+- [] Basic pre-import video trim tools (to help save space)
+- [] UI tweaks:
+    - crop tool button re-location
+    - natural action button locations (particularly for import windows)
+    - tabbed shortcuts / tutorial page
 
 ## Moonshot goals
-[] object / edge detection for point tracking
-[] Intelligent object crop - zoom onto target moving in frame, keep target in centre of crop.
-[] iOS / Android Support
+- [] object / edge detection for point tracking
+- [] Intelligent object crop - zoom onto target moving in frame, keep target in centre of crop.
+- [] iOS / Android Support
