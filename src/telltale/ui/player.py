@@ -58,6 +58,7 @@ class PlayerScreen(QWidget):
     drawingSelectionChanged = Signal()  # a drawing was selected / deselected
     addClipRequested = Signal(int) # a view's "+" was clicked
     saveRequested = Signal()       # the scene changed (sent after a short pause)
+    historyChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,10 +93,17 @@ class PlayerScreen(QWidget):
         self.tools.modeChanged.connect(lambda m: settings.set_ui_value("draw/mode", m))
         self.tools.colourChanged.connect(self._colour_changed)
         self.tools.styleChanged.connect(self._style_changed)
+        
+        self.tools.undoRequested.connect(self.undo_drawing)
+        self.tools.redoRequested.connect(self.redo_drawing)
         # Undo for drawings: each entry holds how the affected views' drawings
         # looked just before a change (add, move, delete, restyle, clear).
+        # Undoing moves an entry to _redo (holding how they looked before the
+        # undo); any new change clears _redo.
         self._undo: list[list[tuple[VideoPane, object]]] = []
+        self._redo: list[list[tuple[VideoPane, object]]] = []        
         self.scenes_panel = ScenesPanel()
+
 
         # --- video area -----------------------------------------------------
         self.video_area = QWidget()
@@ -113,7 +121,9 @@ class PlayerScreen(QWidget):
             pane.view.clearRequested.connect(lambda p=pane: self.clear_view_drawings(p))
             pane.view.contextRequested.connect(lambda pos, p=pane: self._view_menu(p, pos))
             pane.view.selectionChanged.connect(lambda p=pane: self._selection_changed(p))
-            pane.view.editStarted.connect(lambda p=pane: self._push_undo([p]))
+           # commented for undo/redo testing
+           # pane.view.editStarted.connect(lambda p=pane: self._push_undo([p]))
+            pane.view.editStarted.connect(lambda p=pane: self._push_undo([p], keep_redo=True))
             pane.view.editFinished.connect(lambda moved, p=pane: self._edit_finished(p, moved))
             pane.stepRequested.connect(self.step)
             pane.syncScrubbed.connect(lambda f, p=pane: self.scrub_view(self.panes.index(p), f))
@@ -279,6 +289,8 @@ class PlayerScreen(QWidget):
             pane.unload()
         self.sync.clear()
         self._undo.clear()
+        self._redo.clear()
+        self._history_changed()
         self.rows, self.cols, self.views_shown = 1, 1, 1
         self.active = 0
         self._jog_last = None
@@ -306,8 +318,7 @@ class PlayerScreen(QWidget):
             if info is None:
                 continue
             self.sync.load(i, info.rate, info.frame_count, offset=Fraction(slot.offset))
-            self.panes[i].load(info, FrameSource(info, cache_mb=160), crop=slot.crop,
-                               saved_drawings=slot.drawings)
+            self.panes[i].load(info, FrameSource(info, cache_mb=160), crop=slot.crop, saved_drawings=slot.drawings)
         self.sync.seek(self.sync.time)  # keep it within the clips
         self.active = min(scene.active, self.views_shown - 1)
         saved_timer = timer_mod.parse(scene.timer)
@@ -656,19 +667,49 @@ class PlayerScreen(QWidget):
         if not moved:
             if self._undo:
                 self._undo.pop()  # just a click: nothing to undo
+                self._history_changed()
             return
+        self._redo.clear()  # a real change
+        self._history_changed()
+            
+            # if self._undo:
+            #     self._undo.pop()  # just a click: nothing to undo
+            # return
         d = pane.view.layer.selected_drawing()
         if d is not None and pane.view.layer.is_saved(d.id):
             self._changed()
 
     # --- undo ---------------------------------------------------------------
-    def _push_undo(self, panes: list[VideoPane]):
+    # def _push_undo(self, panes: list[VideoPane]):
+    #     self._undo.append([(p, p.view.layer.snapshot()) for p in panes])
+    #     del self._undo[:-50]  # keep the last 50 steps
+
+    # def _forget_undo(self, pane: VideoPane):
+    #     # The view's clip changed: its old drawings can't come back.
+    #     self._undo = [e for e in self._undo if all(p is not pane for p, _snap in e)]
+
+    def _push_undo(self, panes: list[VideoPane], keep_redo: bool = False):
         self._undo.append([(p, p.view.layer.snapshot()) for p in panes])
         del self._undo[:-50]  # keep the last 50 steps
+        if not keep_redo:
+            self._redo.clear()  # a new change: what was undone can't be redone
+        self._history_changed()
 
     def _forget_undo(self, pane: VideoPane):
         # The view's clip changed: its old drawings can't come back.
         self._undo = [e for e in self._undo if all(p is not pane for p, _snap in e)]
+        self._redo = [e for e in self._redo if all(p is not pane for p, _snap in e)]
+        self._history_changed()
+
+    def can_undo(self) -> bool:
+        return bool(self._undo)
+
+    def can_redo(self) -> bool:
+        return bool(self._redo)
+
+    def _history_changed(self):
+        self.tools.set_history(self.can_undo(), self.can_redo())
+        self.historyChanged.emit()
 
     # --- timer --------------------------------------------------------------
     def _build_timer_menu(self):
@@ -789,13 +830,36 @@ class PlayerScreen(QWidget):
             pane.view.layer.clear_all()
         self._changed()
 
+    # commented out while testing undo/redo buttons.
+    # def undo_drawing(self) -> bool:
+    #     # Put the drawings back how they were before the last change.
+    #     if not self._undo:
+    #         return False
+    #     for pane, snap in self._undo.pop():
+    #         pane.view.layer.restore(snap)
+    #     self._changed()
+    #     self.drawingSelectionChanged.emit()
+    #     return True
+
     def undo_drawing(self) -> bool:
         # Put the drawings back how they were before the last change.
-        if not self._undo:
+        return self._step_history(self._undo, self._redo)
+
+    def redo_drawing(self) -> bool:
+        # Put back a change that was undone.
+        return self._step_history(self._redo, self._undo)
+
+    def _step_history(self, source: list, target: list) -> bool:
+        # Take the last entry from `source` (undo or redo), first saving how
+        # those views look now on `target`, so the step can be reversed.
+        if not source:
             return False
-        for pane, snap in self._undo.pop():
+        entry = source.pop()
+        target.append([(pane, pane.view.layer.snapshot()) for pane, _snap in entry])
+        for pane, snap in entry:
             pane.view.layer.restore(snap)
         self._changed()
+        self._history_changed()
         self.drawingSelectionChanged.emit()
         return True
 

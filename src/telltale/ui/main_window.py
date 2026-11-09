@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self.player.addClipRequested.connect(self._add_clip_to_view)
         self.player.saveRequested.connect(self._save_scene)
         self.player.drawingSelectionChanged.connect(self._update_state)
+        self.player.historyChanged.connect(self._update_state)
         panel = self.player.scenes_panel
         panel.sceneChosen.connect(self._scene_chosen)
         panel.newSceneRequested.connect(lambda: self.scene_pid and self.new_scene(self.scene_pid))
@@ -147,6 +148,8 @@ class MainWindow(QMainWindow):
         self.act_select_all = self._action(edit_menu, "Select &all", self.home.select_all, "Ctrl+A")
         edit_menu.addSeparator()
         self.act_undo_drawing = self._action(edit_menu, "&Undo drawing", self._undo_drawing, "Ctrl+Z")
+        self.act_redo_drawing = self._action(edit_menu, "R&edo drawing", self._redo_drawing, "Ctrl+Shift+Z")
+        self.act_redo_drawing.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
         self.act_clear_all = self._action(edit_menu, "&Clear All", self._clear_all_drawings)
         self.act_clear_all.setToolTip("Remove every drawing in this scene, on every frame")
         edit_menu.setToolTipsVisible(True)
@@ -200,7 +203,10 @@ class MainWindow(QMainWindow):
         self.act_delete.setEnabled(on_library or self.player.selected_drawing() is not None)
         self.act_select_all.setEnabled(on_library)
         self.act_library.setEnabled(not on_library)
-        self.act_undo_drawing.setEnabled(not on_library)
+        # self.act_undo_drawing.setEnabled(not on_library) #commented while testing undo /redo buttons
+        self.act_undo_drawing.setEnabled(not on_library and self.player.can_undo())
+        self.act_redo_drawing.setEnabled(not on_library and self.player.can_redo())
+
         self.act_clear_all.setEnabled(not on_library)
         # Shown whenever the player is showing (a project scene or a quick view).
         self.act_return.setVisible(not on_library)
@@ -872,6 +878,11 @@ class MainWindow(QMainWindow):
     def _undo_drawing(self):
         if not self.player.undo_drawing():
             self.statusBar().showMessage("Nothing to undo.", 3000)
+
+    def _redo_drawing(self):
+        if not self.player.redo_drawing():
+            self.statusBar().showMessage("Nothing to redo.", 3000)
+
 
     def _clear_all_drawings(self):
         saved = self.player.saved_drawing_count()
