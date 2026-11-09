@@ -1,2 +1,20 @@
-<?xml version="1.0" encoding="utf-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" xmlns:bx="https://boxy-svg.com" width="256px" height="256px"><defs><linearGradient id="gradient-3" bx:pinned="true"><stop offset="0" style="stop-color: rgb(83, 172, 232);"/><stop offset="1" style="stop-color: rgb(0, 58, 97);"/></linearGradient><linearGradient id="gradient-3-0" href="#gradient-3" gradientUnits="userSpaceOnUse" x1="130.618" y1="7.478" x2="130.618" y2="247.478" gradientTransform="matrix(1.057185, 0, 0, 1.057185, -9.689697, -6.482626)"/><linearGradient id="gradient-2" bx:pinned="true"><stop offset="0" style="stop-color: rgb(255, 255, 255);"/><stop offset="1" style="stop-color: rgb(181, 181, 181);"/></linearGradient><linearGradient id="gradient-2-0" href="#gradient-2" gradientUnits="userSpaceOnUse" x1="139.401" y1="94.994" x2="139.401" y2="175.039" gradientTransform="matrix(1.075375, 0, 0, 1.075375, -14.63413, -14.345315)"/><bx:export><bx:file format="svg" href="#object-0"/><bx:file format="svg" href="#object-1" path="Untitled 2.svg"/><bx:file format="svg" href="#object-2" path="Untitled 3.svg"/><bx:file format="svg" href="#object-3" path="Untitled 4.svg"/><bx:file format="svg" href="#object-4" path="Untitled 5.svg"/><bx:file format="svg" href="#object-5" path="Untitled 6.svg"/><bx:file format="svg" path="telltale.svg" normalization="{&quot;removeBoxySVGMetadata&quot;:true}"/></bx:export></defs><rect x="1.536" y="1.423" width="253.725" height="253.725" rx="52" style="stroke-width: 1; fill: url(&quot;#gradient-3-0&quot;); stroke: rgba(0, 0, 0, 0);" id="object-0"/><text style="white-space: pre; fill: rgb(51, 51, 51); font-family: Arial, sans-serif; font-size: 29.6px;" x="124.285" y="138.487" id="object-1"> </text><rect x="24.335" y="56.379" width="208.125" height="143.811" style="stroke: rgb(0, 0, 0); fill: none; stroke-width: 16px;" rx="37.814" ry="37.814" id="object-2"/><path style="fill: url(&quot;#gradient-2-0&quot;); stroke: rgb(0, 0, 0); stroke-width: 8px;" d="M 81.555 94.122 L 81.963 167.375 C 117.174 167.408 168.591 161.909 184.924 129.122 C 171.469 98.576 109.121 92.13 81.555 94.122 Z" id="object-3"/><path d="M 47.946 173.569 C 67.318 165.82 94.071 172.05 110.982 154.666 C 127.893 137.283 141.037 130.734 156.901 127.751" fill="none" stroke="#ff3b30" stroke-linecap="round" style="stroke-width: 7px;" id="object-4"/><path d="M 65.906 185.867 C 87.216 178.118 109.677 182.62 118.261 169.635 C 126.846 156.65 146.22 145.704 161.718 137.955" fill="none" stroke="#34c759" stroke-linecap="round" style="stroke-width: 7px;" id="object-5"/></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Telltale Analysis app icon. Kept to plain SVG (no CSS styles, no gradient
+       inheritance) so Qt's SVG renderer draws it the same as a browser. -->
+  <defs>
+    <linearGradient id="background" gradientUnits="userSpaceOnUse" x1="128.4" y1="1.42" x2="128.4" y2="255.15">
+      <stop offset="0" stop-color="#53ace8"/>
+      <stop offset="1" stop-color="#003a61"/>
+    </linearGradient>
+    <linearGradient id="sail" gradientUnits="userSpaceOnUse" x1="135.27" y1="87.81" x2="135.27" y2="173.89">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#b5b5b5"/>
+    </linearGradient>
+  </defs>
+  <rect x="1.536" y="1.423" width="253.725" height="253.725" rx="52" ry="52" fill="url(#background)"/>
+  <rect x="24.335" y="56.379" width="208.125" height="143.811" rx="37.814" ry="37.814" fill="none" stroke="#000000" stroke-width="16"/>
+  <path d="M 81.555 94.122 L 81.963 167.375 C 117.174 167.408 168.591 161.909 184.924 129.122 C 171.469 98.576 109.121 92.13 81.555 94.122 Z" fill="url(#sail)" stroke="#000000" stroke-width="8"/>
+  <path d="M 47.946 173.569 C 67.318 165.82 94.071 172.05 110.982 154.666 C 127.893 137.283 141.037 130.734 156.901 127.751" fill="none" stroke="#ff3b30" stroke-width="7" stroke-linecap="round"/>
+  <path d="M 65.906 185.867 C 87.216 178.118 109.677 182.62 118.261 169.635 C 126.846 156.65 146.22 145.704 161.718 137.955" fill="none" stroke="#34c759" stroke-width="7" stroke-linecap="round"/>
+</svg>
