@@ -12,9 +12,15 @@ Features currently implemented
 - [] Mac compatability
 - [] Audio during realtime playback
 - [] Improved touchscreen support
-- [] Persistent video timestamps; mark points of interest in clip to look at, or skip to.
 - [] Basic pre-import video trim tools (to help save space)
-- [] UI tweaks:
+- Tools:
+    - Persistent video timestamps
+    - Time Loop: play a segment over and over again
+    - multi-timer support, at least 1 timer per clip, rather than 1 timer per scene
+    - additional shapes (increased default set)
+    - tool setting tab while drawing (quickly adjust hold time, thickness, color of existing drawings)
+
+- UI tweaks:
     - crop tool button re-location
     - natural action button locations (particularly for import windows)
     - tabbed shortcuts / tutorial page
@@ -23,3 +29,5 @@ Features currently implemented
 - [] object / edge detection for point tracking
 - [] Intelligent object crop - zoom onto target moving in frame, keep target in centre of crop.
 - [] iOS / Android Support
+- [] Shape design tool (for making your own custom shapes)
+- [] key framing drawings on boards to make animations?
